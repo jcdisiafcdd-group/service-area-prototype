@@ -1,0 +1,14 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+requests==2.34.2
+
+pandas==3.0.3
+numpy==2.4.6
+scipy==1.18.1
+shapely==2.1.2
+pyproj==3.8.0
+geopandas==1.1.4
+networkx==3.6.1
+
+# OSM fallback (optional for prototype, used only if official network unavailable)
+osmnx==2.1.1

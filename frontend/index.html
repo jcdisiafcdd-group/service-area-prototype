@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HK Walking Service Area — Sham Shui Po</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body { margin: 0; height: 100%; font-family: "Segoe UI", Arial, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: #fff; border-radius: 8px; padding: 12px 16px;
+      box-shadow: 0 1px 6px rgba(0,0,0,.25); min-width: 230px;
+      font-size: 13px;
+    }
+    .panel h1 { font-size: 15px; margin: 0 0 6px; }
+    .panel label { display: block; margin: 8px 0 2px; font-weight: 600; }
+    .panel input[type="checkbox"] { margin-right: 6px; vertical-align: middle; }
+    .result { margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee; }
+    .result .big { font-size: 26px; font-weight: 700; color: #1a7f37; }
+    .result .hint { color: #666; margin-top: 4px; }
+    .error { color: #b00; margin-top: 6px; }
+    #slider { width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel">
+    <h1>Walking service area</h1>
+    <div class="controls">
+      <label for="minutes">Walk time: <span id="minutesLabel">15</span> min</label>
+      <input type="range" id="slider" min="5" max="30" step="1" value="15" />
+      <label><input type="checkbox" id="showPoints" checked /> Show community facilities</label>
+      <label><input type="checkbox" id="showNetwork" checked /> Show district boundary</label>
+    </div>
+    <div class="result" id="result" hidden>
+      <div class="big"><span id="count">0</span></div>
+      <div class="hint" id="detail"></div>
+    </div>
+    <div class="hint" id="routeInfo" hidden></div>
+    <div class="hint">Click anywhere on the map to compute. Routes to every reachable facility are drawn automatically — click a marker to highlight a single route.</div>
+    <div class="error" id="error" hidden></div>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
