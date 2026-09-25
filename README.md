@@ -27,7 +27,7 @@ Prototype scope: **Sham Shui Po** district, built on the official **LandsD 3D Pe
 ## Project Structure
 
 ```
-pp-proj2-prototype/
+service-area-prototype/
   backend/
     ingest.py          # fetch district boundary + query 3D Pedestrian Network by bbox (paginated) -> data/*.geojson
     graph_builder.py   # merge edge endpoints in HK1980 Grid (EPSG:2326), build NetworkX graph, cache pickle
@@ -52,9 +52,17 @@ pp-proj2-prototype/
 ### 1. Prerequisites
 
 - Python 3.14.x on PATH
+- Git
 - An internet connection (first run downloads district data)
 
-### 2. Create and activate the virtual environment
+### 2. Clone the repository
+
+```powershell
+git clone https://github.com/jcdisiafcdd-group/service-area-prototype.git
+cd service-area-prototype
+```
+
+### 3. Create and activate the virtual environment
 
 ```powershell
 # create (only if venv/ does not exist yet)
@@ -64,13 +72,13 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-### 3. Install dependencies
+### 4. Install dependencies
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 4. Build the data pipeline (one-time, per district)
+### 5. Build the data pipeline (one-time, per district)
 
 Run from the project root:
 
@@ -92,12 +100,12 @@ python -m backend.points          # fetches community facilities (iGeoCom) -> da
 # uvicorn directly from inside backend\ without a launcher.)
 
 # Option A — from the project root:
-cd C:\work\pp-proj2-prototype
+cd service-area-prototype
 .\venv\Scripts\Activate.ps1
 python run.py
 
 # Option B — from inside backend\:
-cd C:\work\pp-proj2-prototype\backend
+cd service-area-prototype\backend
 ..\venv\Scripts\Activate.ps1
 python run.py
 ```
