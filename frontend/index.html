@@ -7,41 +7,107 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body { margin: 0; height: 100%; font-family: "Segoe UI", Arial, sans-serif; }
-    #map { position: absolute; inset: 0; }
+    body { display: grid; grid-template-columns: 340px minmax(0, 1fr); }
+    #map { position: relative; min-width: 0; height: 100%; }
     .panel {
-      position: absolute; top: 12px; left: 12px; z-index: 1000;
-      background: #fff; border-radius: 8px; padding: 12px 16px;
-      box-shadow: 0 1px 6px rgba(0,0,0,.25); min-width: 230px;
+      box-sizing: border-box; display: flex; flex-direction: column; height: 100%; overflow-y: auto;
+      background: #fff; border-right: 1px solid #ddd; padding: 20px;
       font-size: 13px;
     }
-    .panel h1 { font-size: 15px; margin: 0 0 6px; }
-    .panel label { display: block; margin: 8px 0 2px; font-weight: 600; }
+    .panel h1 { font-size: 16px; margin: 0 0 16px; }
+    .controls { display: flex; flex-direction: column; gap: 8px; }
+    .layer-toggles { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
+    .layer-toggles label { white-space: nowrap; }
+    .panel label { display: block; font-weight: 600; }
     .panel input[type="checkbox"] { margin-right: 6px; vertical-align: middle; }
-    .result { margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee; }
+    .panel input[type="range"] { width: 100%; margin: 2px 0 8px; }
+    .result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee; }
     .result .big { font-size: 26px; font-weight: 700; color: #1a7f37; }
+    .result .total { margin-left: 3px; color: #6b7280; font-size: 14px; font-weight: 600; }
     .result .hint { color: #666; margin-top: 4px; }
-    .error { color: #b00; margin-top: 6px; }
-    #slider { width: 100%; }
+    .facility-list { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee; }
+    .facility-list-heading { color: #374151; font-size: 12px; font-weight: 700; }
+    .facility-list-items { max-height: 300px; margin-top: 8px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; }
+    .facility-row {
+      box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid #f0f0f0;
+      background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer;
+    }
+    .facility-row:last-child { border-bottom: 0; }
+    .facility-row:hover, .facility-row:focus-visible { background: #f3f4f6; outline: none; }
+    .facility-row-names { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+    .facility-row-name-zh { overflow: hidden; color: #1f2937; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .facility-row-name-en { overflow: hidden; color: #666; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .facility-row-meta { flex: 0 0 auto; color: #4b5563; font-size: 11px; white-space: nowrap; }
+    .facility-list-empty { padding: 10px; color: #666; font-size: 12px; }
+    .route-info { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee; }
+    .hint { color: #555; line-height: 1.45; }
+    .instructions { margin: 16px 0 0; color: #666; font-size: 12px; }
+    .footnote {
+      position: sticky; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 6px;
+      box-sizing: border-box; margin-top: auto; padding: 12px 0 0; border-top: 1px solid #eee;
+      background: #fff; color: #666; font-size: 11px;
+    }
+    .info-button {
+      box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+      flex: 0 0 18px; width: 18px; height: 18px; padding: 0; border: 1px solid #9ca3af;
+      border-radius: 50%; background: #fff; color: #6b7280;
+      font: 600 12px/1 Arial, sans-serif; cursor: pointer;
+    }
+    .info-button:hover, .info-button:focus-visible { background: #f3f4f6; color: #374151; outline: none; }
+    .info-popover {
+      position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 20;
+      box-sizing: border-box; width: 270px; max-width: calc(100vw - 40px);
+      padding: 12px; border: 1px solid #d1d5db; border-radius: 6px;
+      background: #fff; box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+      color: #555; font-size: 12px; line-height: 1.45;
+    }
+    .info-popover strong { display: block; margin-bottom: 4px; color: #374151; }
+    .info-popover p { margin: 0; }
+    .facility-popup { min-width: 190px; max-width: 270px; line-height: 1.35; }
+    .facility-name { font-size: 14px; font-weight: 600; color: #1f2937; }
+    .facility-name-en { margin-top: 2px; font-size: 13px; color: #374151; }
+    .facility-type { display: inline-block; margin-top: 9px; padding: 3px 7px; border-radius: 10px; background: #f3f4f6; color: #4b5563; font-size: 11px; }
+    .facility-address { margin-top: 9px; color: #666; font-size: 12px; }
+    .facility-address-en { margin-top: 3px; color: #777; font-size: 11px; }
+    .facility-address-label { color: #888; }
+    .error { color: #b00; margin-top: 12px; }
   </style>
 </head>
 <body>
-  <div id="map"></div>
   <div class="panel">
     <h1>Walking service area</h1>
     <div class="controls">
-      <label for="minutes">Walk time: <span id="minutesLabel">15</span> min</label>
+      <label for="slider">Walk time: <span id="minutesLabel">15</span> min</label>
       <input type="range" id="slider" min="5" max="30" step="1" value="15" />
-      <label><input type="checkbox" id="showPoints" checked /> Show community facilities</label>
-      <label><input type="checkbox" id="showNetwork" checked /> Show district boundary</label>
+      <label for="speedSlider">Walking speed: <span id="speedLabel">4.8</span> km/h</label>
+      <input type="range" id="speedSlider" min="2" max="6" step="0.1" value="4.8" />
+      <div class="layer-toggles">
+        <label><input type="checkbox" id="showPoints" checked /> Community facilities</label>
+        <label><input type="checkbox" id="showNetwork" checked /> District boundary</label>
+      </div>
     </div>
+    <div class="hint instructions">Click anywhere on the map to compute. Routes to every reachable facility are drawn automatically — click a marker to highlight a single route.</div>
     <div class="result" id="result" hidden>
-      <div class="big"><span id="count">0</span></div>
+      <div class="big"><span id="count">0</span><span class="total" id="totalPoints"></span></div>
       <div class="hint" id="detail"></div>
     </div>
-    <div class="hint" id="routeInfo" hidden></div>
-    <div class="hint">Click anywhere on the map to compute. Routes to every reachable facility are drawn automatically — click a marker to highlight a single route.</div>
+    <div class="facility-list" id="facilityList" hidden>
+      <div class="facility-list-heading">Reachable facilities</div>
+      <div class="facility-list-items" id="facilityListItems"></div>
+    </div>
+    <div class="hint route-info" id="routeInfo" hidden></div>
+    <div class="footnote">
+      <button class="info-button" id="walkingTimeInfo" type="button" title="Walking-time information" aria-label="Walking-time information" aria-expanded="false" aria-controls="walkingTimePopover" aria-haspopup="dialog">i</button>
+      <span>Walking-time note</span>
+      <div class="info-popover" id="walkingTimePopover" role="dialog" aria-label="Walking-time note" hidden>
+        <strong>Walking-time note</strong>
+        <p>The estimate uses the selected constant speed on the official pedestrian network. It does not add traffic-light or crossing delays, slope/gradient speed penalties, accessibility-barrier restrictions, or special speeds for stairs, escalators, lifts, and travelators. Routes start and end at snapped network nodes, so short access distances are excluded.</p>
+      </div>
+    </div>
     <div class="error" id="error" hidden></div>
   </div>
+  <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/app.js"></script>
 </body>

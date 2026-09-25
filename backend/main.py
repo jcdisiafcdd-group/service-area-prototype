@@ -19,12 +19,14 @@ class ServiceAreaRequest(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
     minutes: float = Field(ge=1, le=120, default=15)
+    walk_speed_kmh: float = Field(ge=2.0, le=6.0, default=config.WALK_SPEED_KMH)
 
 
 class RouteRequest(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
     point_id: int = Field(ge=1)
+    walk_speed_kmh: float = Field(ge=2.0, le=6.0, default=config.WALK_SPEED_KMH)
 
 
 @asynccontextmanager
@@ -63,14 +65,18 @@ def points() -> JSONResponse:
 
 @app.post("/api/service-area")
 def compute_service_area(req: ServiceAreaRequest) -> dict:
-    result = service_area.service_area(req.lng, req.lat, req.minutes)
+    result = service_area.service_area(
+        req.lng, req.lat, req.minutes, req.walk_speed_kmh
+    )
     status = 200 if result["ok"] else 422
     return JSONResponse(result, status_code=status)
 
 
 @app.post("/api/route")
 def get_route(req: RouteRequest) -> dict:
-    result = service_area.route(req.lng, req.lat, req.point_id)
+    result = service_area.route(
+        req.lng, req.lat, req.point_id, req.walk_speed_kmh
+    )
     status = 200 if result["ok"] else 422
     return JSONResponse(result, status_code=status)
 

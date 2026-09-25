@@ -13,7 +13,7 @@ from __future__ import annotations
 import functools
 import pickle
 import time
-from typing import Any
+from typing import Any, Callable
 
 import networkx as nx
 import numpy as np
@@ -76,6 +76,18 @@ def load_points() -> np.ndarray:
     return pts
 
 
+def _speed_mpm(walk_speed_kmh: float) -> float:
+    if walk_speed_kmh <= 0:
+        raise ValueError("walk_speed_kmh must be positive")
+    return walk_speed_kmh * 1000 / 60
+
+
+def _time_weight(speed_mpm: float) -> Callable:
+    return lambda _u, _v, data: min(
+        edge["length_m"] for edge in data.values()
+    ) / speed_mpm
+
+
 def snap(lon: float, lat: float) -> int | None:
     e, n = _transform().transform(lon, lat)
     g, tree = _load()
@@ -85,16 +97,23 @@ def snap(lon: float, lat: float) -> int | None:
     return _NODE_LIST[idx]
 
 
-def service_area(lon: float, lat: float, minutes: float) -> dict[str, Any]:
+def service_area(
+    lon: float,
+    lat: float,
+    minutes: float,
+    walk_speed_kmh: float = config.WALK_SPEED_KMH,
+) -> dict[str, Any]:
     g, _ = _load()
     t0 = time.time()
+    speed_mpm = _speed_mpm(walk_speed_kmh)
+    weight = _time_weight(speed_mpm)
 
     start = snap(lon, lat)
     if start is None:
         return {"ok": False, "error": "Click is not near the pedestrian network."}
 
     lengths, paths = nx.single_source_dijkstra(
-        g, start, cutoff=minutes, weight="time_min"
+        g, start, cutoff=minutes, weight=weight
     )
 
     n = g.number_of_nodes()
@@ -126,6 +145,7 @@ def service_area(lon: float, lat: float, minutes: float) -> dict[str, Any]:
         routes.append({
             "point_id": features[i]["properties"]["id"],
             "name": features[i]["properties"].get("name"),
+            "name_zh": features[i]["properties"].get("name_zh"),
             "time_min": round(lengths[pt_node], 1),
             "length_m": round(length_m, 0),
             "path": {"type": "LineString", "coordinates": rcoords},
@@ -138,6 +158,7 @@ def service_area(lon: float, lat: float, minutes: float) -> dict[str, Any]:
         "total_points": len(points),
         "reachable_nodes": len(reachable),
         "minutes": minutes,
+        "walk_speed_kmh": round(walk_speed_kmh, 2),
         "snapped": {"lon": snapped_node["x"], "lat": snapped_node["y"]},
         "district": config.DISTRICT,
         "polygon": polygon,
@@ -156,10 +177,17 @@ def _points_fc() -> dict[str, Any]:
     return _POINTS_FC
 
 
-def route(lon: float, lat: float, point_id: int) -> dict[str, Any]:
+def route(
+    lon: float,
+    lat: float,
+    point_id: int,
+    walk_speed_kmh: float = config.WALK_SPEED_KMH,
+) -> dict[str, Any]:
     """Shortest walking path + metrics from a click to one facility point."""
     g, _ = _load()
     t0 = time.time()
+    speed_mpm = _speed_mpm(walk_speed_kmh)
+    weight = _time_weight(speed_mpm)
 
     start = snap(lon, lat)
     if start is None:
@@ -179,7 +207,7 @@ def route(lon: float, lat: float, point_id: int) -> dict[str, Any]:
         return {"ok": False, "error": "Facility is not near the pedestrian network."}
 
     try:
-        dist_time, path = nx.bidirectional_dijkstra(g, start, target, weight="time_min")
+        dist_time, path = nx.bidirectional_dijkstra(g, start, target, weight=weight)
     except nx.NetworkXNoPath:
         return {"ok": False, "error": "No walking route found to that facility."}
 
@@ -194,6 +222,8 @@ def route(lon: float, lat: float, point_id: int) -> dict[str, Any]:
         "ok": True,
         "point_id": point_id,
         "name": target_ftr["properties"].get("name"),
+        "name_zh": target_ftr["properties"].get("name_zh"),
+        "walk_speed_kmh": round(walk_speed_kmh, 2),
         "time_min": round(dist_time, 1),
         "length_m": round(length_m, 0),
         "snapped": {"lon": snapped["x"], "lat": snapped["y"]},

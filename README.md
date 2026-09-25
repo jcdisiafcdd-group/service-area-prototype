@@ -10,11 +10,11 @@ Prototype scope: **Sham Shui Po** district, built on the official **LandsD 3D Pe
 
 - Official **3D Pedestrian Network** (LandsD) — true 3D polylines (elevation-aware), cropped to a district via the 18-District boundary.
 - Official **basemap** — LandsD Topographic Map API (WGS84 XYZ tiles), so the map face is the official HK topographic map.
-- **Community-facility destinations** — the point layer is real data: LandsD iGeoCom community facilities (`CLASS=COM`, `TYPE=CMC` community centres/halls + `TYPE=FSC` family/IFS centres), not random points.
-- **Service area**: click the map → the backend does a shortest-path search on the walk graph with a time cutoff and returns a concave-hull isochrone polygon + an accurate reachable-facility count.
-- **Walking routes**: routes to *every* reachable facility are drawn from the click point; click any facility marker to highlight that single route with walk time & distance.
+- **Community-facility destinations** — the point layer is real data: LandsD iGeoCom community facilities (`CLASS=COM`, `TYPE=CMC` community centres/halls + `TYPE=FSC` family/IFS centres), not random points. Popups and the reachable-facility list use Chinese names/addresses as primary text with English as secondary text; route results include both names.
+- **Service area**: click the map → the backend does a shortest-path search on the walk graph with a time cutoff and returns a concave-hull isochrone polygon + an accurate reachable-facility count. The map automatically fits the polygon, snapped start point, and returned routes.
+- **Walking routes**: routes to *every* reachable facility are drawn in blue from the click point; the reachable-facility list is sorted by walking time, and clicking a list row or facility marker highlights that single route in purple with walk time & distance.
 - **Accurate counting**: each facility is snapped to its nearest graph node and counted only if its walking cost ≤ cutoff minutes (not just "is it inside the polygon").
-- Minutes slider (5–30, default 15) to explore how the reachable area/count changes.
+- Minutes slider (5–30, default 15) and walking-speed slider (2–6 km/h, default 4.8) recompute the reachable area and cost.
 
 ## Tech Stack
 
@@ -31,13 +31,13 @@ pp-proj2-prototype/
   backend/
     ingest.py          # fetch district boundary + query 3D Pedestrian Network by bbox (paginated) -> data/*.geojson
     graph_builder.py   # merge edge endpoints in HK1980 Grid (EPSG:2326), build NetworkX graph, cache pickle
-    points.py          # fetch LandsD iGeoCom, keep community facilities (CLASS=COM, TYPE=CMC/FSC), crop -> data/points.geojson
-    service_area.py    # snap click -> dijkstra(cutoff) -> isochrone polygon + accurate count + routes to reachable facilities
+    points.py          # fetch LandsD iGeoCom, keep community facilities (CLASS=COM, TYPE=CMC/FSC), export bilingual names/addresses -> data/points.geojson
+    service_area.py    # snap click -> dijkstra(cutoff) -> isochrone polygon + accurate count + bilingual routes to reachable facilities
     main.py            # FastAPI app: GET /api/points, POST /api/service-area + /api/route, serves frontend/
     run.py             # launcher that also works from inside backend/
   frontend/
-    index.html         # Leaflet map, official basemap, district outline + facility toggles, minutes slider
-    app.js             # service area, all-routes drawing, single-route highlight on marker click
+    index.html         # Leaflet map, 340px sidebar, bilingual facility popups, layer toggles, sliders, reachable list, i-note popover
+    app.js             # service area, map auto-fit, all-route drawing, reachable list, purple single-route highlight
   data/                # cached raw edges, graph, points (generated — not checked in)
   venv/                # Python virtual environment
   requirements.txt
@@ -111,10 +111,12 @@ Open http://localhost:8000 in a browser.
 ### Usage
 
 1. The map loads centred on Sham Shui Po with the district outline and its **28 community facilities** (iGeoCom `CMC`/`FSC`) on the official LandsD basemap.
-2. **Click anywhere on the district** — the backend computes the service area for the cutoff shown on the slider.
-3. A green isochrone polygon is drawn, a blue route to **every reachable facility** is drawn from the click point, and the panel reports **"N facilities reachable within X min"**.
-4. **Click any facility marker** to highlight its single walking route (thicker blue line) with walk time & distance.
+2. **Click anywhere on the district** — the backend computes the service area for the cutoff shown on the slider, then fits the polygon, snapped start point, and all returned routes in the map view.
+3. A green isochrone polygon is drawn, a blue route to **every reachable facility** is drawn from the click point, and the panel shows the reachable count, walking speed, and network statistics. The reachable facilities are also listed in a scrollable, time-sorted sidebar list.
+4. **Click a list row or any facility marker** to highlight its single walking route (purple line) with walk time & distance. Marker popups show Chinese names/addresses first and English second, and are auto-panned near screen edges.
 5. Drag the **minutes slider** (5–30) to recompute.
+6. Adjust the **walking-speed slider** (2–6 km/h, default 4.8) to change the time cost and recompute.
+7. Use the compact **i** button at the bottom of the sidebar to open the walking-time note.
 
 ### API
 
@@ -123,10 +125,10 @@ Open http://localhost:8000 in a browser.
 | `/` | GET | — | Leaflet frontend |
 | `/api/health` | GET | — | `{status, district, nodes, edges}` |
 | `/api/district` | GET | — | selected district boundary (GeoJSON) |
-| `/api/points` | GET | — | GeoJSON of community facilities (CMC/FSC) |
-| `/api/service-area` | POST | `{"lat": 22.33, "lng": 114.16, "minutes": 15}` | `{ok, count, total_points, reachable_nodes, snapped, polygon, routes}` |
+| `/api/points` | GET | — | GeoJSON of community facilities (CMC/FSC) with `name`, `name_zh`, `address`, and `address_zh` |
+| `/api/service-area` | POST | `{"lat": 22.33, "lng": 114.16, "minutes": 15, "walk_speed_kmh": 4.8}` | `{ok, count, total_points, reachable_nodes, walk_speed_kmh, snapped, polygon, routes}`; each route includes `point_id`, `name`, `name_zh`, `time_min`, `length_m`, and `path` |
 | `/api/service-area` | POST | click far from network | `{ok: false, error: "..."}` (HTTP 422) |
-| `/api/route` | POST | `{"lat": 22.33, "lng": 114.16, "point_id": 1}` | `{ok, name, time_min, length_m, snapped, path}` (LineString) |
+| `/api/route` | POST | `{"lat": 22.33, "lng": 114.16, "point_id": 1, "walk_speed_kmh": 4.8}` | `{ok, name, name_zh, walk_speed_kmh, time_min, length_m, snapped, path}` (LineString) |
 
 ---
 
@@ -134,10 +136,12 @@ Open http://localhost:8000 in a browser.
 
 | Setting | Where | Default |
 |---|---|---|
-| Walking speed | `backend/graph_builder.py` (`WALK_SPEED_KMH`) | 4.8 km/h |
+| Walking speed | `backend/config.py` (default) and `frontend/index.html` / `frontend/app.js` (request slider) | 4.8 km/h default; UI range 2–6 km/h |
 | Prototype district | `backend/config.py` (or ingest CLI arg) | `Sham Shui Po District` |
 | Facility points | `backend/points.py` (`CLASS`/`TYPES`) | iGeoCom `COM` + `CMC`/`FSC` (28 in SSP) |
-| Minutes slider range | `frontend/app.js` | 5–30 |
+| Minutes slider range | `frontend/index.html` / `frontend/app.js` | 5–30 |
+| Sidebar | `frontend/index.html` / `frontend/app.js` | 340px, scrollable; reachable list capped at 300px with one-row layer toggles |
+| Walking-time note | `frontend/index.html` / `frontend/app.js` | Small `i` popover; closes on outside click or Escape |
 
 ---
 
@@ -154,12 +158,18 @@ Open http://localhost:8000 in a browser.
 ## How the service area works
 
 1. **Snap** — the clicked point is snapped to its nearest graph node (scipy `cKDTree`). Clicks > ~500 m from the network are rejected (e.g. water).
-2. **Search** — `networkx.single_source_dijkstra(G, node, cutoff=minutes)` finds every node reachable within the cutoff *and* the shortest path to each.
+2. **Search** — `networkx.single_source_dijkstra(G, node, cutoff=minutes)` finds every node reachable within the cutoff *and* the shortest path to each. The edge cost is recalculated from each 3D edge length using the selected walking speed.
 3. **Polygon** — a Shapely `concave_hull` over the reachable node coordinates produces the display isochrone.
 4. **Count** — each facility is snapped to its nearest node and counted when its walk cost ≤ cutoff.
-5. **Routes** — the path to every reachable facility is returned as a LineString (the frontend draws them all; `/api/route` exposes any single one).
+5. **Routes** — the path to every reachable facility is returned as a LineString (the frontend draws them all; `/api/route` exposes any single one). The sidebar list is sorted by `time_min`; selecting a row or marker highlights that route in purple.
 
-Walking cost per edge: `time_min = 3D length / walking speed`. Because the network carries real Z values, slopes are priced with true surface distance. (Gradient/Tobler speed penalties and wheelchair-barrier filtering are deferred.)
+> **Map framing:** after each service-area response, Leaflet fits the display polygon, snapped start marker, and all returned routes with 70px padding. Selecting one facility fits its route with 90px padding and pans the target into a popup-safe area near screen edges.
+
+> **Green polygon interpretation:** the polygon is an approximate display envelope built with Shapely `concave_hull(ratio=0.8, allow_holes=False)` over reachable **network-node coordinates**. It is not a true network-distance isochrone and is not used for counting. No outward buffer is applied in the normal case, so a consistent-looking gap can appear because reachable nodes are sparse, original facility-marker coordinates are not hull inputs, and the hull may bridge concavities or cross inaccessible areas. Only degenerate one-point or one-line hulls receive automatic 25 m or 10 m buffers. Facility counts and routes remain based on shortest-path walking cost, so the green outline may be looser or tighter than the true reachable set.
+
+Walking cost per edge: `time_min = 3D length / selected walking speed`. Because the network carries real Z values, slopes use true 3D surface distance, but no additional slope-dependent speed penalty is applied.
+
+> **Walking-time note (small `i` popover):** the prototype uses a constant user-selected speed and does not add traffic-light or crossing delays, gradient/slope speed penalties, accessibility-barrier restrictions, or special speeds for stairs, escalators, lifts, and travelators. Click and facility coordinates are snapped to network nodes, so short access distances to/from the click and facility are excluded. These simplifications, and any differences between the official network and Google Maps, can produce different walking times. The popover closes on outside click or `Escape`.
 
 ### Performance (measured, Sham Shui Po)
 

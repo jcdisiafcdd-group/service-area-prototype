@@ -78,9 +78,11 @@ def main() -> None:
                 "properties": {
                     "id": len(picked) + 1,
                     "name": p.get("ENGLISHNAME"),
+                    "name_zh": p.get("CHINESENAME"),
                     "type": p.get("TYPE"),
                     "category": f"{p.get('CLASS')}/{p.get('TYPE')}",
                     "address": p.get("E_ADDRESS"),
+                    "address_zh": p.get("C_ADDRESS"),
                     "district": p.get("E_DISTRICT"),
                 },
             })
