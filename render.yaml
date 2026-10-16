@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: service-area-prototype
+    runtime: python
+    plan: free
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      python -m backend.ingest &&
+      python -m backend.graph_builder &&
+      python -m backend.points
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
