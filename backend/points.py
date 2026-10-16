@@ -18,19 +18,40 @@ from datetime import datetime, timezone
 
 import geopandas as gpd
 import requests
+import urllib3
 from shapely.geometry import Point
 
 from . import config
+
+# The iGeoCom host serves an incomplete TLS chain, so its download is
+# deliberately unverified (see _download); silence the matching warning.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CLASS = "COM"
 TYPES = ("CMC", "FSC")
 
 
 def _download(url: str, dest) -> None:
+    """Fetch `url` to `dest`, preferring curl but falling back to requests.
+
+    The iGeoCom host (open.hkmapservice.gov.hk) serves an incomplete TLS chain,
+    so certificate verification fails on platforms that do not resolve the
+    missing intermediate (Render's Linux curl: exit 60), while it succeeds on
+    Windows (curl reads the OS cert store). Fall back to requests with
+    `verify=False` — the long-standing workaround for this gov host.
+    """
     curl = shutil.which("curl")
     if curl:
-        subprocess.run([curl, "-L", "-sS", "-o", str(dest), url], check=True)
-        return
+        result = subprocess.run(
+            [curl, "-L", "-sS", "-o", str(dest), url], check=False
+        )
+        if result.returncode == 0:
+            return
+        print(
+            f"[points] curl failed (exit {result.returncode}); "
+            "falling back to requests (verify=False)",
+            flush=True,
+        )
     resp = requests.get(url, verify=False, timeout=600)
     resp.raise_for_status()
     dest.write_bytes(resp.content)
