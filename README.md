@@ -14,13 +14,15 @@ Prototype scope: **Sham Shui Po** district, built on the official **LandsD 3D Pe
 - **Service area**: click the map → the backend does a shortest-path search on the walk graph with a time cutoff and returns a concave-hull isochrone polygon + an accurate reachable-facility count. The map automatically fits the polygon, snapped start point, and returned routes.
 - **Walking routes**: routes to *every* reachable facility are drawn in blue from the click point; the reachable-facility list is sorted by walking time, and clicking a list row or facility marker highlights that single route in purple with walk time & distance.
 - **Accurate counting**: each facility is snapped to its nearest graph node and counted only if its walking cost ≤ cutoff minutes (not just "is it inside the polygon").
+- **Place search**: a search box at the top of the sidebar finds places/addresses via the official Address Lookup Service (ALS), restricted to Sham Shui Po, with exact name/address matches ranked first; picking a result sets the start point and runs the computation.
+- **Map legend**: a bottom-right legend (a plain Leaflet control, no plugin) explains the service-area polygon, blue routes, purple selected route, community-facility dot, the snapped start pin, and the district boundary — using the same symbols as the map.
 - Minutes slider (5–30, default 15) and walking-speed slider (2–6 km/h, default 4.8) recompute the reachable area and cost.
 
 ## Tech Stack
 
-- **Backend**: Python 3.14 + FastAPI + Uvicorn + NetworkX + GeoPandas / Shapely / SciPy / PyProj
+- **Backend**: Python 3.13 + FastAPI + Uvicorn + NetworkX + GeoPandas / Shapely / SciPy / PyProj
 - **Frontend**: Leaflet (single HTML page served by FastAPI)
-- **Data**: LandsD 3D Pedestrian Network (public ArcGIS REST Feature Service), LandsD iGeoCom community facilities (public GeoJSON), LandsD Topographic Map basemap (public XYZ tiles), crop via Home Affairs Department 18-District boundary (public GeoJSON)
+- **Data**: LandsD 3D Pedestrian Network (public ArcGIS REST Feature Service), LandsD iGeoCom community facilities (public GeoJSON), LandsD Topographic Map basemap (public XYZ tiles), Address Lookup Service (ALS) for place search, crop via Home Affairs Department 18-District boundary (public GeoJSON)
 
 ---
 
@@ -32,12 +34,13 @@ service-area-prototype/
     ingest.py          # fetch district boundary + query 3D Pedestrian Network by bbox (paginated) -> data/*.geojson
     graph_builder.py   # merge edge endpoints in HK1980 Grid (EPSG:2326), build NetworkX graph, cache pickle
     points.py          # fetch LandsD iGeoCom, keep community facilities (CLASS=COM, TYPE=CMC/FSC), export bilingual names/addresses -> data/points.geojson
+    search.py          # place search via ALS: normalize nested schema, keep hits inside this district -> {name, name_zh, address, lat, lng, geoaddress, score}
     service_area.py    # snap click -> dijkstra(cutoff) -> isochrone polygon + accurate count + bilingual routes to reachable facilities
-    main.py            # FastAPI app: GET /api/points, POST /api/service-area + /api/route, serves frontend/
+    main.py            # FastAPI app: GET /api/points, /api/search; POST /api/service-area + /api/route; serves frontend/
     run.py             # launcher that also works from inside backend/
   frontend/
-    index.html         # Leaflet map, 340px sidebar, bilingual facility popups, layer toggles, sliders, reachable list, i-note popover
-    app.js             # service area, map auto-fit, all-route drawing, reachable list, purple single-route highlight
+    index.html         # Leaflet map, 340px sidebar, search box, bilingual facility popups, layer toggles, sliders, reachable list, map legend, i-note popover
+    app.js             # service area, place search, map auto-fit, all-route drawing, reachable list, purple single-route highlight, legend control
   data/                # cached raw edges, graph, points (generated — not checked in)
   venv/                # Python virtual environment
   requirements.txt
@@ -51,7 +54,7 @@ service-area-prototype/
 
 ### 1. Prerequisites
 
-- Python 3.14.x on PATH
+- Python 3.13.x on PATH
 - Git
 - An internet connection (first run downloads district data)
 
@@ -110,21 +113,33 @@ cd service-area-prototype\backend
 python run.py
 ```
 
-Open http://localhost:8000 in a browser.
+Open http://localhost:8000 in a browser (http://127.0.0.1:8000 is equivalent — the
+launcher binds a dual-stack socket, so both work). The frontend (`frontend/index.html`)
+is served at the root path `/` by the FastAPI app.
 
 > Startup is fast (~1–2 s): the graph is only *unpickled* at boot, never rebuilt.
 > The slow ingest + graph-build steps run once and are cached in `data/`,
 > so restarting the server never re-runs them.
 
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'uvicorn'` (or `fastapi`, `geopandas`, …) | The virtual environment is not active, so the launcher is using the system Python. Run `.\venv\Scripts\Activate.ps1` (or `..\venv\Scripts\Activate.ps1` from inside `backend\`) and try again, or `pip install -r requirements.txt`. |
+| The page loads but every click says "Request failed", and `http://localhost:8000/api/health` returns 404 | Another program already owns port 8000, and `localhost` is reaching it instead of this app. A stray `python -m http.server` is a common culprit. List what holds the port with `Get-NetTCPConnection -LocalPort 8000 -State Listen`, stop that process, and re-run. |
+| `[run] Could not bind http://127.0.0.1:8000 ...` at startup | Port 8000 is already in use. Stop the process shown by `Get-NetTCPConnection -LocalPort 8000 -State Listen` and re-run. |
+| Opening `http://localhost:8000` shows a file/directory listing | A static file server (not this app) is answering on port 8000. See the row above; use `http://127.0.0.1:8000` to reach the app in the meantime. |
+
 ### Usage
 
-1. The map loads centred on Sham Shui Po with the district outline and its **28 community facilities** (iGeoCom `CMC`/`FSC`) on the official LandsD basemap.
-2. **Click anywhere on the district** — the backend computes the service area for the cutoff shown on the slider, then fits the polygon, snapped start point, and all returned routes in the map view.
-3. A green isochrone polygon is drawn, a blue route to **every reachable facility** is drawn from the click point, and the panel shows the reachable count, walking speed, and network statistics. The reachable facilities are also listed in a scrollable, time-sorted sidebar list.
-4. **Click a list row or any facility marker** to highlight its single walking route (purple line) with walk time & distance. Marker popups show Chinese names/addresses first and English second, and are auto-panned near screen edges.
-5. Drag the **minutes slider** (5–30) to recompute.
-6. Adjust the **walking-speed slider** (2–6 km/h, default 4.8) to change the time cost and recompute.
-7. Use the compact **i** button at the bottom of the sidebar to open the walking-time note.
+1. The map loads centred on Sham Shui Po with the district outline and its **28 community facilities** (iGeoCom `CMC`/`FSC`) on the official LandsD basemap. A legend at the bottom-right explains the map symbols.
+2. **Use the search box** at the top of the sidebar to jump to a place or address. Results appear as you type (from the official Address Lookup Service, restricted to Sham Shui Po); choosing one drops the start marker there and computes the service area.
+3. **Click anywhere on the district** — the backend computes the service area for the cutoff shown on the slider, then fits the polygon, snapped start point, and all returned routes in the map view.
+4. A green isochrone polygon is drawn, a blue route to **every reachable facility** is drawn from the click point, and the panel shows the reachable count, walking speed, and network statistics. The reachable facilities are also listed in a scrollable, time-sorted sidebar list.
+5. **Click a list row or any facility marker** to highlight its single walking route (purple line) with walk time & distance. Marker popups show Chinese names/addresses first and English second, and are auto-panned near screen edges.
+6. Drag the **minutes slider** (5–30) to recompute.
+7. Adjust the **walking-speed slider** (2–6 km/h, default 4.8) to change the time cost and recompute.
+8. Use the compact **i** button at the bottom of the sidebar to open the walking-time note.
 
 ### API
 
@@ -134,6 +149,7 @@ Open http://localhost:8000 in a browser.
 | `/api/health` | GET | — | `{status, district, nodes, edges}` |
 | `/api/district` | GET | — | selected district boundary (GeoJSON) |
 | `/api/points` | GET | — | GeoJSON of community facilities (CMC/FSC) with `name`, `name_zh`, `address`, and `address_zh` |
+| `/api/search` | GET | `q` (place/address text), `limit` (optional, default 8, max 20) | `{ok, query, results}` — ALS matches inside Sham Shui Po as `{name, name_zh, address, address_zh, lat, lng, geoaddress, score}` |
 | `/api/service-area` | POST | `{"lat": 22.33, "lng": 114.16, "minutes": 15, "walk_speed_kmh": 4.8}` | `{ok, count, total_points, reachable_nodes, walk_speed_kmh, snapped, polygon, routes}`; each route includes `point_id`, `name`, `name_zh`, `time_min`, `length_m`, and `path` |
 | `/api/service-area` | POST | click far from network | `{ok: false, error: "..."}` (HTTP 422) |
 | `/api/route` | POST | `{"lat": 22.33, "lng": 114.16, "point_id": 1, "walk_speed_kmh": 4.8}` | `{ok, name, name_zh, walk_speed_kmh, time_min, length_m, snapped, path}` (LineString) |
@@ -148,7 +164,8 @@ Open http://localhost:8000 in a browser.
 | Prototype district | `backend/config.py` (or ingest CLI arg) | `Sham Shui Po District` |
 | Facility points | `backend/points.py` (`CLASS`/`TYPES`) | iGeoCom `COM` + `CMC`/`FSC` (28 in SSP) |
 | Minutes slider range | `frontend/index.html` / `frontend/app.js` | 5–30 |
-| Sidebar | `frontend/index.html` / `frontend/app.js` | 340px, scrollable; reachable list capped at 300px with one-row layer toggles |
+| Sidebar | `frontend/index.html` / `frontend/app.js` | 340px, scrollable; reachable list shown in full (single panel scroll) with one-row layer toggles |
+| Map legend | `frontend/index.html` / `frontend/app.js` | Bottom-right Leaflet control (no plugin); fixed 18px swatch column; start swatch uses the real Leaflet default marker icon |
 | Walking-time note | `frontend/index.html` / `frontend/app.js` | Small `i` popover; closes on outside click or Escape |
 
 ---
@@ -161,6 +178,7 @@ Open http://localhost:8000 in a browser.
 | 3D Pedestrian Network (LandsD) | `https://services3.arcgis.com/6j1KwZfY2fZrfNMR/arcgis/rest/services/3DPN_LandsD_gdb/FeatureServer/0` | Public ArcGIS REST; 3D polylines (Z), `maxRecordCount=2000` (paginated); fields incl. `Gradient`, `Direction`, `Feature_Type`, `Wheelchair_*`, `Enabled`. |
 | Geo-Community Database (iGeoCom, LandsD) | `https://open.hkmapservice.gov.hk/OpenData/directDownload?productName=iGeoCom&sheetName=iGeoCom&productFormat=GEOJSON` | Whole-HK WGS84 GeoJSON (zip, quarterly). `CLASS=COM` community facilities; `TYPE=CMC` (community centres/halls), `FSC` (family/IFS centres). Also `VOF`, `RCM`. |
 | LandsD Topographic Map (basemap) | `https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/WGS84/{z}/{x}/{y}.png` | Public XYZ PNG tiles (WGS84 Web-Mercator scheme), zoom 10–20; LandsD attribution shown on map. |
+| Address Lookup Service (ALS, Digital Policy Office) | `https://www.als.gov.hk/lookup?q={query}` | Free-text place/address search, no API key. JSON via `Accept: application/json` (default is XML). Returns bilingual names, street/district, WGS84 lat/lon, a GeoAddress ID and a relevance `Score`. Used by the sidebar search box; results are filtered to the prototype district. |
 | OSM (fallback only) | via OSMnx | Used only if the official network is unavailable. |
 
 ## How the service area works

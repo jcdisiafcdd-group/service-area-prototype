@@ -41,3 +41,8 @@ IGEOCOM_URL = (
     "?productName=iGeoCom&sheetName=iGeoCom&productFormat=GEOJSON"
 )
 IGEOCOM_RAW_FILE = DATA_DIR / "iGeoCom_POI.geojson"
+
+# Address Lookup Service (ALS) — Digital Policy Office address search.
+# JSON/XML selected via the Accept header; no API key required.
+ALS_LOOKUP_URL = "https://www.als.gov.hk/lookup"
+ALS_GEOADDRESS_URL = "https://www.als.gov.hk/galookup"

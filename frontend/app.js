@@ -68,6 +68,61 @@
       L.geoJSON(fc, { interactive: false, style: { color: "#0b6bcb", weight: 2, fill: false } })
         .addTo(districtLayer);
       districtLayer.addTo(map);
+      (function addLegend() {
+        const Legend = L.Control.extend({
+          options: { position: "bottomright" },
+          onAdd: function () {
+            const container = L.DomUtil.create("div", "legend");
+            container.innerHTML = `
+              <h4>Legend</h4>
+              <div class="legend-row">
+                <span class="legend-swatch legend-poly"></span>
+                <span>Service area (reachable envelope)</span>
+              </div>
+              <div class="legend-row">
+                <span class="legend-swatch legend-line-blue"></span>
+                <span>Routes (all reachable)</span>
+              </div>
+              <div class="legend-row">
+                <span class="legend-swatch legend-line-purple"></span>
+                <span>Selected route</span>
+              </div>
+              <div class="legend-row">
+                <span class="legend-swatch legend-dot-facility"></span>
+                <span>Community facility</span>
+              </div>
+              <div class="legend-row">
+                <span class="legend-swatch legend-start"></span>
+                <span>Start (snapped)</span>
+              </div>
+              <div class="legend-row">
+                <span class="legend-swatch legend-outline"></span>
+                <span>District Boundary</span>
+              </div>
+            `;
+            // Use the real Leaflet default marker icon (same image as the map
+            // start pin) instead of an approximated CSS circle. createIcon()
+            // injects inline styles that override CSS: native 25x41 size plus
+            // negative anchor margins (-12px/-41px, which pin the marker tip
+            // to its lat/lng on the map). Reset all of them so the icon just
+            // sits centred in its 18px legend slot.
+            const startSlot = container.querySelector(".legend-start");
+            if (startSlot) {
+              const startImg = new L.Icon.Default().createIcon();
+              startImg.className = "legend-start-img";
+              startImg.alt = "";
+              startImg.style.width = "auto";
+              startImg.style.height = "14px"; // ~8.5px wide, comparable to the 12px facility dot
+              startImg.style.margin = "0";
+              startSlot.appendChild(startImg);
+            }
+            L.DomEvent.disableClickPropagation(container);
+            L.DomEvent.disableScrollPropagation(container);
+            return container;
+          },
+        });
+        map.addControl(new Legend());
+      })();
     });
 
   fetch("/api/points")
@@ -240,7 +295,7 @@
       if (data.polygon) {
         const areaLayer = L.geoJSON(data.polygon, {
           interactive: false,
-          style: { color: "#16a34a", weight: 2, fillOpacity: 0.18 },
+          style: { color: "#16a34a", weight: 2, fillOpacity: 0.18, fillColor: "#16a34a" },
         }).addTo(polygonLayer);
         const polygonBounds = areaLayer.getBounds();
         if (polygonBounds.isValid()) areaBounds.extend(polygonBounds);
@@ -292,5 +347,159 @@
   speedSlider.addEventListener("input", () => {
     speedLabel.textContent = Number(speedSlider.value).toFixed(1);
     if (lastLat !== null) compute(lastLat, lastLng);
+  });
+
+  // ---- place search (ALS) ----------------------------------------------
+
+  const placeSearch = document.getElementById("placeSearch");
+  const searchResults = document.getElementById("searchResults");
+  const SEARCH_MIN_CHARS = 2;
+  const SEARCH_DEBOUNCE_MS = 300;
+  const SEARCH_LIMIT = 8;
+  let searchTimer = null;
+  let searchController = null;
+  let searchItems = [];
+
+  function closeSearch() {
+    searchResults.replaceChildren();
+    searchResults.hidden = true;
+    searchItems = [];
+    placeSearch.setAttribute("aria-expanded", "false");
+  }
+
+  function setActiveSearchItem(index) {
+    if (!searchItems.length) return;
+    const size = searchItems.length;
+    const next = ((index % size) + size) % size;
+    searchItems.forEach((el, i) => {
+      el.classList.toggle("is-active", i === next);
+      el.setAttribute("aria-selected", String(i === next));
+    });
+    searchItems[next].scrollIntoView({ block: "nearest" });
+  }
+
+  function highlightText(text, query) {
+    const raw = String(text ?? "");
+    const q = String(query ?? "").trim();
+    if (!q) return escapeHtml(raw);
+    const idx = raw.toLowerCase().indexOf(q.toLowerCase());
+    if (idx < 0) return escapeHtml(raw);
+    // Escape each slice separately so injected markup can never be revived.
+    return (
+      escapeHtml(raw.slice(0, idx)) +
+      "<mark class=\"search-mark\">" +
+      escapeHtml(raw.slice(idx, idx + q.length)) +
+      "</mark>" +
+      escapeHtml(raw.slice(idx + q.length))
+    );
+  }
+
+  function searchRowHtml(r, query) {
+    const primary = r.name_zh || r.name || r.address_zh || r.address || "Unnamed";
+    const lines = [`<span class="search-row-name-zh">${highlightText(primary, query)}</span>`];
+    if (r.name && r.name !== primary) {
+      lines.push(`<span class="search-row-name-en">${highlightText(r.name, query)}</span>`);
+    }
+    if (r.address_zh && r.address_zh !== primary) {
+      lines.push(`<span class="search-row-address-zh">${highlightText(r.address_zh, query)}</span>`);
+    }
+    if (r.address && r.address !== primary && r.address !== r.address_zh) {
+      lines.push(`<span class="search-row-address-en">${highlightText(r.address, query)}</span>`);
+    }
+    return lines.join("");
+  }
+
+  function renderSearchResults(data, query) {
+    searchResults.replaceChildren();
+    searchItems = [];
+    const empty = document.createElement("div");
+    empty.className = "search-empty";
+
+    if (!data.ok) {
+      empty.textContent = data.error || "Search failed.";
+      searchResults.appendChild(empty);
+      searchResults.hidden = false;
+      return;
+    }
+    const results = data.results || [];
+    if (!results.length) {
+      empty.textContent = `No results in Sham Shui Po for “${query}”.`;
+      searchResults.appendChild(empty);
+      searchResults.hidden = false;
+      return;
+    }
+    results.forEach((r, i) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "search-row";
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", "false");
+      row.dataset.index = String(i);
+      row.innerHTML = searchRowHtml(r, query);
+      row.addEventListener("click", () => pickSearchResult(r));
+      searchResults.appendChild(row);
+      searchItems.push(row);
+    });
+    searchResults.hidden = false;
+    placeSearch.setAttribute("aria-expanded", "true");
+  }
+
+  async function runSearch(query) {
+    if (searchController) searchController.abort();
+    searchController = new AbortController();
+    try {
+      const resp = await fetch(
+        `/api/search?q=${encodeURIComponent(query)}&limit=${SEARCH_LIMIT}`,
+        { signal: searchController.signal }
+      );
+      const data = await resp.json();
+      if (placeSearch.value.trim() !== query) return; // stale response
+      renderSearchResults(data, query);
+    } catch (e) {
+      if (e.name !== "AbortError") closeSearch();
+    }
+  }
+
+  function pickSearchResult(result) {
+    if (searchController) searchController.abort();
+    placeSearch.value = result.name_zh || result.name || placeSearch.value;
+    closeSearch();
+    lastLat = result.lat;
+    lastLng = result.lng;
+    compute(lastLat, lastLng);
+  }
+
+  placeSearch.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const query = placeSearch.value.trim();
+    if (query.length < SEARCH_MIN_CHARS) {
+      closeSearch();
+      return;
+    }
+    searchTimer = setTimeout(() => runSearch(query), SEARCH_DEBOUNCE_MS);
+  });
+
+  placeSearch.addEventListener("keydown", (event) => {
+    const open = !searchResults.hidden;
+    const activeIndex = searchItems.findIndex((el) =>
+      el.classList.contains("is-active")
+    );
+    if (event.key === "ArrowDown" && open && searchItems.length) {
+      event.preventDefault();
+      setActiveSearchItem(activeIndex < 0 ? 0 : activeIndex + 1);
+    } else if (event.key === "ArrowUp" && open && searchItems.length) {
+      event.preventDefault();
+      setActiveSearchItem(activeIndex < 0 ? searchItems.length - 1 : activeIndex - 1);
+    } else if (event.key === "Enter" && open && activeIndex >= 0) {
+      event.preventDefault();
+      searchItems[activeIndex].click();
+    } else if (event.key === "Escape") {
+      closeSearch();
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest && event.target.closest(".search")) return;
+    closeSearch();
   });
 })();

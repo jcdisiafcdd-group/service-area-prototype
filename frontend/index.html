@@ -16,6 +16,31 @@
     }
     .panel h1 { font-size: 16px; margin: 0 0 16px; }
     .controls { display: flex; flex-direction: column; gap: 8px; }
+    .search { position: relative; margin-bottom: 16px; }
+    .search-input {
+      box-sizing: border-box; width: 100%; padding: 8px 10px;
+      border: 1px solid #d1d5db; border-radius: 4px; font: inherit;
+    }
+    .search-input:focus { border-color: #0b6bcb; outline: none; box-shadow: 0 0 0 2px rgb(11 107 203 / 15%); }
+    .search-results {
+      position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 500;
+      max-height: 260px; overflow-y: auto;
+      border: 1px solid #d1d5db; border-radius: 4px; background: #fff;
+      box-shadow: 0 6px 16px rgb(0 0 0 / 18%);
+    }
+    .search-row {
+      box-sizing: border-box; display: flex; flex-direction: column; gap: 2px;
+      width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid #f0f0f0;
+      background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer;
+    }
+    .search-row:last-child { border-bottom: 0; }
+    .search-row:hover, .search-row:focus-visible, .search-row.is-active { background: #f3f4f6; outline: none; }
+    .search-row-name-zh { color: #1f2937; font-size: 12px; font-weight: 600; }
+    .search-row-name-en { color: #666; font-size: 11px; }
+    .search-row-address-zh { color: #4b5563; font-size: 11px; }
+    .search-row-address-en { color: #888; font-size: 11px; }
+    .search-mark { padding: 0 1px; border-radius: 2px; background: #fde68a; color: inherit; }
+    .search-empty { padding: 9px 10px; color: #666; font-size: 12px; }
     .layer-toggles { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
     .layer-toggles label { white-space: nowrap; }
     .panel label { display: block; font-weight: 600; }
@@ -27,7 +52,7 @@
     .result .hint { color: #666; margin-top: 4px; }
     .facility-list { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee; }
     .facility-list-heading { color: #374151; font-size: 12px; font-weight: 700; }
-    .facility-list-items { max-height: 300px; margin-top: 8px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; }
+    .facility-list-items { margin-top: 8px; border: 1px solid #eee; border-radius: 4px; }
     .facility-row {
       box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 10px;
       width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid #f0f0f0;
@@ -72,11 +97,88 @@
     .facility-address-en { margin-top: 3px; color: #777; font-size: 11px; }
     .facility-address-label { color: #888; }
     .error { color: #b00; margin-top: 12px; }
+    .legend {
+      background: rgba(255, 255, 255, 0.92);
+      padding: 8px 10px;
+      border-radius: 4px;
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .legend h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 2px 0;
+      white-space: nowrap;
+    }
+    .legend-swatch {
+      box-sizing: border-box;
+      flex: 0 0 18px;               /* fixed swatch column so every symbol shares one centre line */
+      width: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .legend-poly {
+      width: 18px;
+      height: 18px;
+      background: rgba(22, 163, 74, 0.18);
+      border: 1px solid #16a34a;
+      border-radius: 2px;
+      box-sizing: border-box;
+    }
+    .legend-line-blue {
+      width: 18px;
+      height: 2px;
+      background: #3b82f6;
+      opacity: 0.6;
+      border-radius: 2px;
+    }
+    .legend-line-purple {
+      width: 18px;
+      height: 2px;
+      background: #7c3aed;
+      opacity: 0.9;
+      border-radius: 2px;
+    }
+    .legend-dot-facility {
+      flex: 0 0 18px;
+      width: 18px;
+      height: 18px;
+      padding: 3px;                 /* 18px slot - 3px each side = 12px visual dot */
+      background: #d97706;
+      background-clip: content-box; /* dot stays centred in the shared column */
+      border-radius: 50%;
+      opacity: 0.9;
+    }
+    .legend-start-img {
+      display: block;
+    }
+    .legend-outline {
+      width: 18px;
+      height: 2px;
+      background: #0b6bcb;
+      opacity: 0.8;
+      border-radius: 2px;
+    }
   </style>
 </head>
 <body>
   <div class="panel">
     <h1>Walking service area</h1>
+    <div class="search">
+      <input type="search" id="placeSearch" class="search-input" autocomplete="off"
+             placeholder="Search a place or address…" aria-label="Search a place or address"
+             aria-describedby="searchResults" aria-controls="searchResults" aria-expanded="false"
+             role="combobox" aria-autocomplete="list" />
+      <div class="search-results" id="searchResults" role="listbox" aria-label="Search results" hidden></div>
+    </div>
     <div class="controls">
       <label for="slider">Walk time: <span id="minutesLabel">15</span> min</label>
       <input type="range" id="slider" min="5" max="30" step="1" value="15" />

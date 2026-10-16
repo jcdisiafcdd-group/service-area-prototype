@@ -6,10 +6,10 @@ Interactive walking-network service area analysis for Hong Kong. Click a locatio
 
 ## Tech Stack
 
-- **Backend**: Python + FastAPI + Uvicorn (all currently installed in the local Python 3.14 environment)
+- **Backend**: Python + FastAPI + Uvicorn (all currently installed in the local Python 3.13 virtual environment)
 - **Graph / geospatial**: NetworkX, Shapely, GeoPandas, SciPy, PyProj, OSMnx (OSM fallback only)
 - **Frontend**: Leaflet (single HTML page served by FastAPI), LandsD Topographic Map API basemap tiles
-- **Data**: Official LandsD **3D Pedestrian Network** (via public ArcGIS REST Feature Service), **iGeoCom** community facilities (public GeoJSON), **LandsD Topographic Map** basemap (public XYZ tiles), cropped with the 18 **District Boundary** polygons
+- **Data**: Official LandsD **3D Pedestrian Network** (via public ArcGIS REST Feature Service), **iGeoCom** community facilities (public GeoJSON), **LandsD Topographic Map** basemap (public XYZ tiles), **Address Lookup Service (ALS)** for place search, cropped with the 18 **District Boundary** polygons
 
 ## Data Sources
 
@@ -19,6 +19,7 @@ Interactive walking-network service area analysis for Hong Kong. Click a locatio
 | 3D Pedestrian Network (LandsD) | `https://services3.arcgis.com/6j1KwZfY2fZrfNMR/arcgis/rest/services/3DPN_LandsD_gdb/FeatureServer/0` | Public ArcGIS REST; `esriGeometryPolyline` with Z (true 3D), `maxRecordCount=2000` (paginate), query by bbox with `inSR/outSR=4326&f=geojson`. Fields include `Gradient`, `Direction`, `Feature_Type`, `Location`, `Wheelchair_*`, `Enabled`, `Floor_ID`, `Building_ID`, `Street_Name`. Integer code fields need the CSDI value-code data dictionary. |
 | Geo-Community Database iGeoCom (LandsD) | `https://open.hkmapservice.gov.hk/OpenData/directDownload?productName=iGeoCom&sheetName=iGeoCom&productFormat=GEOJSON` | Whole-HK WGS84 GeoJSON inside a zip (quarterly), 37k+ POIs. `CLASS` taxonomy: `COM` = community facilities (822 in HK) with `TYPE` `CMC` (community centres/halls), `FSC` (family/IFS centres), `VOF`, `RCM`. Fields `ENGLISHNAME`, `CHINESENAME`, `E_ADDRESS`, `C_ADDRESS`, `E_DISTRICT`, `EASTING/NORTHING` (HK80). Needs `curl` download (gov host TLS cert fails Python `requests` chain). |
 | LandsD Topographic Map (basemap) | `https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/WGS84/{z}/{x}/{y}.png` | Public XYZ PNG tiles (WGS84 = standard Web-Mercator scheme), zoom 10–20. Leaflet layer in `frontend/app.js`; LandsD attribution required (see CSDI Topographic Map API docs). |
+| Address Lookup Service (ALS, Digital Policy Office) | `https://www.als.gov.hk/lookup?q={query}` | Free-text place/address search, no API key. JSON via `Accept: application/json` (default is XML). Returns bilingual names, street/district, WGS84 lat/lon, GeoAddress ID, relevance `Score`. Used by `backend/search.py`; results filtered to the prototype district polygon. |
 
 ## Project Structure
 
@@ -27,12 +28,13 @@ backend/
   ingest.py          # fetch district boundary + query 3D Pedestrian Network by bbox (paginated) -> data/*.geojson
   graph_builder.py   # merge edge endpoints in HK1980 Grid (EPSG:2326), build NetworkX graph, cache .gpickle
   points.py          # fetch LandsD iGeoCom Geo-Community Database (whole-HK GeoJSON), keep community facilities CLASS=COM + TYPE CMC/FSC, export bilingual names/addresses -> data/points.geojson
+  search.py          # ALS place search: normalize the nested schema -> {name, name_zh, address, address_zh, lat, lng, geoaddress, score}; keep only hits inside this district
   service_area.py    # snap click -> dijkstra(cutoff) -> concave-hull polygon + accurate count + bilingual walking routes to reachable facilities
-  main.py            # FastAPI app: GET /api/points & /api/district, POST /api/service-area & /api/route, serves frontend/
+  main.py            # FastAPI app: GET /api/points, /api/district & /api/search, POST /api/service-area & /api/route, serves frontend/
   run.py             # launcher that also works from inside backend/
 frontend/
-  index.html         # Leaflet map, 340px sidebar, bilingual facility popups, one-row layer toggles, minutes/speed sliders, reachable list, i-note popover
-  app.js             # service area, map auto-fit, all-routes drawing, time-sorted reachable list, purple single-route highlight
+  index.html         # Leaflet map, 340px sidebar, search box, bilingual facility popups, one-row layer toggles, minutes/speed sliders, reachable list, map legend, i-note popover
+  app.js             # service area, place search (debounced), map auto-fit, all-routes drawing, time-sorted reachable list, purple single-route highlight, legend control
 data/                # cached raw edges, graph, points (generated, not checked in)
 run.py               # root launcher (python run.py from anywhere)
 README.md
@@ -49,7 +51,9 @@ README.md
 - **Walking-time omissions**: the constant-speed model does not add traffic-light or crossing delays, gradient/slope speed penalties, accessibility-barrier restrictions, or special speeds for stairs, escalators, lifts, and travelators. Click and facility coordinates are snapped to network nodes, so short access distances are excluded.
 - **Counting**: accurate — snap each facility point to its nearest node and count points whose walk cost <= cutoff minutes (not just polygon containment).
 - **Walking routes**: every service-area click returns a shortest-path LineString to each reachable facility (`routes` array, with `point_id`, bilingual `name`, `time_min`, `length_m`, and `path`); the frontend draws them all, populates a time-sorted sidebar list, and `/api/route` re-computes a single one for highlighting.
-- **Sidebar interaction**: the left pane is 340px wide and scrollable; layer toggles share one row, the reachable-facility list is capped at 300px, and the walking-time note is opened from a small `i` popover that closes on outside click or Escape.
+- **Place search**: `backend/search.py` proxies the ALS `lookup` endpoint (`Accept: application/json`), normalizes the nested schema, and keeps only hits whose WGS84 point falls inside this district's polygon (Shapely `covers`). Results are ranked exact-first (query appears in name > in address > ALS fuzzy) and then by ALS relevance score, because street queries come back loosely scored. The frontend search box calls `/api/search` with a ~300 ms debounce and an `AbortController`; each row shows name, English name, and Chinese + English address with the matched text highlighted; picking a result sets the start point and triggers the same `compute()` flow as a map click. ALS fails soft to `{ok: false, error}`.
+- **Sidebar interaction**: the left pane is 340px wide and scrollable; layer toggles share one row, the reachable-facility list is shown in full with no internal scrollbar (only the outer pane scrolls), and the walking-time note is opened from a small `i` popover that closes on outside click or Escape.
+- **Map legend**: a bottom-right Leaflet control (`L.Control` custom class in `app.js`, no plugin) explains the symbols — service-area polygon, all routes (blue), selected route (purple), community facility, snapped start pin, and district boundary. Swatches use a fixed 18px column so all symbols share one centre line; the start swatch reuses the real Leaflet default marker icon (`new L.Icon.Default().createIcon()`), with its native size and anchor margins reset inline because `createIcon()` overrides CSS.
 - **Sanity guard**: reject clicks farther than ~500 m from the network (e.g. clicks on water).
 - Data source is swappable (`osm` fallback vs official network); `service_area.py` is source-agnostic.
 
