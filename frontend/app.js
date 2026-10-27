@@ -16,9 +16,24 @@
   const allRoutesLayer = L.layerGroup();
   const focusRouteLayer = L.layerGroup();
   const pointLayers = new Map();
+  // Facility properties (name, name_zh, type, address, address_zh) by id,
+  // taken from the /api/points GeoJSON that is loaded anyway.
+  const pointProps = new Map();
   let clickMarker = null;
   let lastLat = null;
   let lastLng = null;
+
+  // Labels for the reachable facilities live in their own overlay above the
+  // map panes (below the pop-up pane) so they can be positioned freely.
+  const reachLabels = document.createElement("div");
+  reachLabels.className = "reach-labels";
+  map.getContainer().appendChild(reachLabels);
+  const reachLabelTip = document.createElement("div");
+  reachLabelTip.className = "reach-label-tip";
+  reachLabelTip.hidden = true;
+  reachLabels.appendChild(reachLabelTip);
+  let reachLabelItems = [];
+  let labelLayoutQueued = false;
 
   const minutesLabel = document.getElementById("minutesLabel");
   const slider = document.getElementById("slider");
@@ -36,10 +51,10 @@
     return String(value).replace(/[&<>"']/g, (char) => entities[char]);
   }
 
-  function bilingualName(name, nameZh) {
-    return [...new Set([name, nameZh].filter(Boolean))]
-      .map(escapeHtml)
-      .join("<br/>");
+  function facilityTypeLabel(type) {
+    if (type === "CMC") return "Community centre / hall";
+    if (type === "FSC") return "Family service centre";
+    return "";
   }
 
   function setInfoOpen(open) {
@@ -57,6 +72,10 @@
     if (event.key === "Escape" && !infoPopover.hidden) {
       setInfoOpen(false);
       infoButton.focus();
+      return;
+    }
+    if (event.key === "Escape" && !facilityCard.hidden) {
+      clearFacilityCard(); // dismiss the details, keep the selection
     }
   });
 
@@ -130,33 +149,18 @@
     .then((fc) => {
       L.geoJSON(fc, {
         pointToLayer: (f, latlng) =>
-          L.circleMarker(latlng, { radius: 4, color: "#d97706", fillOpacity: 0.9, weight: 1 }),
+          L.circleMarker(latlng, {
+            radius: 4,
+            color: "#d97706",
+            fillOpacity: 0.9,
+            weight: 1,
+            // Selecting a facility must not start a new service-area
+            // computation (that is what a click on the map background does).
+            bubblingMouseEvents: false,
+          }),
         onEachFeature: (f, layer) => {
           const p = f.properties;
-          const type = p.type === "CMC" ? "Community centre / hall" : "Family service centre";
-          const primaryName = p.name_zh || p.name || "Unnamed";
-          const secondaryName = p.name_zh && p.name && p.name !== p.name_zh
-            ? `<div class="facility-name-en">${escapeHtml(p.name)}</div>`
-            : "";
-          const address = p.address_zh || p.address
-            ? `<div class="facility-address">` +
-              (p.address_zh
-                ? `<div><span class="facility-address-label">地址:</span> ${escapeHtml(p.address_zh)}</div>`
-                : "") +
-              (p.address
-                ? `<div class="facility-address-en"><span class="facility-address-label">Address:</span> ${escapeHtml(p.address)}</div>`
-                : "") +
-              `</div>`
-            : "";
-          layer.bindPopup(
-            `<div class="facility-popup">` +
-            `<div class="facility-name">${escapeHtml(primaryName)}</div>` +
-            secondaryName +
-            `<div class="facility-type">${type}</div>` +
-            address +
-            `</div>`,
-            { autoPan: true, autoPanPadding: [80, 80] }
-          );
+          pointProps.set(p.id, p);
           layer.on("click", () => showRoute(p.id, layer));
           pointLayers.set(p.id, layer);
         },
@@ -177,9 +181,7 @@
 
   async function showRoute(pointId, targetLayer) {
     const err = document.getElementById("error");
-    const routeInfo = document.getElementById("routeInfo");
     err.hidden = true;
-    routeInfo.hidden = true;
     focusRouteLayer.clearLayers();
     if (lastLat === null) {
       err.textContent = "Click the map to set a start point first.";
@@ -212,29 +214,153 @@
       const targetLatLng = targetLayer
         ? targetLayer.getLatLng()
         : latlngs[latlngs.length - 1];
-      map.fitBounds(line.getBounds(), {
-        padding: [90, 90],
+      // Show the card first: the framed view has to take its footprint into
+      // account, because the card floats over the map's top-right corner.
+      renderFacilityCard(pointId, data);
+      const bounds = line.getBounds();
+      bounds.extend(targetLatLng);
+      if (clickMarker) bounds.extend(clickMarker.getLatLng());
+      map.fitBounds(bounds, {
+        padding: [70, 70],
         maxZoom: 18,
         animate: false,
       });
-      map.panInside(targetLatLng, {
-        padding: [160, 140],
-        animate: false,
-      });
-      const name = bilingualName(data.name, data.name_zh) || "facility";
-      routeInfo.innerHTML =
-        `<b>Route to ${name}</b>` +
-        ` &middot; ${data.time_min} min` +
-        ` &middot; ${Math.round(data.length_m).toLocaleString()} m`;
-      routeInfo.hidden = false;
+      // A tight fit hides where the route sits in the district, so a selected
+      // route is framed one zoom level further out.
+      if (map.getZoom() > map.getMinZoom()) map.zoomOut(1, { animate: false });
+      panClearOfCard(targetLatLng);
+      markSelectedFacility(pointId);
     } catch (e) {
       err.textContent = "Routing failed.";
       err.hidden = false;
     }
   }
 
-  function renderFacilityList(routes) {
-    const sortedRoutes = [...routes].sort((a, b) => a.time_min - b.time_min);
+  // ---- selected-facility details (top-right map card) -------------------
+  // The details float over the map's top-right corner, so no marker pop-up
+  // ever covers the map points.
+
+  const facilityCard = document.getElementById("facilityCard");
+  const facilityCardBody = document.getElementById("facilityCardBody");
+  const facilityCardClose = document.getElementById("facilityCardClose");
+
+  // The card floats over the top-right corner of the map as a plain Leaflet
+  // control, so clicks inside it never reach the map (no accidental
+  // recompute) and it stacks with the other map overlays.
+  const FacilityCardControl = L.Control.extend({
+    options: { position: "topright" },
+    onAdd: function () {
+      L.DomEvent.disableClickPropagation(facilityCard);
+      L.DomEvent.disableScrollPropagation(facilityCard);
+      return facilityCard;
+    },
+  });
+  map.addControl(new FacilityCardControl());
+
+  function renderFacilityCard(pointId, data) {
+    const p = pointProps.get(pointId) || {};
+    const primaryName = p.name_zh || p.name || "Unnamed";
+    const secondaryName = p.name_zh && p.name && p.name !== p.name_zh
+      ? `<div class="facility-name-en">${escapeHtml(p.name)}</div>`
+      : "";
+    const type = facilityTypeLabel(p.type);
+    const typeHtml = type ? `<div class="facility-type">${escapeHtml(type)}</div>` : "";
+    const address = p.address_zh || p.address
+      ? `<div class="facility-address">` +
+        (p.address_zh
+          ? `<div><span class="facility-address-label">地址:</span> ${escapeHtml(p.address_zh)}</div>`
+          : "") +
+        (p.address
+          ? `<div class="facility-address-en"><span class="facility-address-label">Address:</span> ${escapeHtml(p.address)}</div>`
+          : "") +
+        `</div>`
+      : "";
+    facilityCardBody.innerHTML =
+      `<div class="facility-name">${escapeHtml(primaryName)}</div>` +
+      secondaryName +
+      typeHtml +
+      address +
+      `<div class="facility-card-meta">` +
+      `<strong>${data.time_min.toFixed(1)} min</strong>` +
+      ` &middot; ${Math.round(data.length_m).toLocaleString()} m on foot` +
+      `</div>`;
+    facilityCard.hidden = false;
+  }
+
+  function clearFacilityCard() {
+    facilityCard.hidden = true;
+    facilityCardBody.replaceChildren();
+  }
+
+  // The card is pinned to the map's top-right corner. If the framed view put
+  // the selected facility behind it, nudge the map so the dot stays visible.
+  function panClearOfCard(latlng) {
+    if (facilityCard.hidden || !map.panBy) return;
+    const card = facilityCard.getBoundingClientRect();
+    const box = map.getContainer().getBoundingClientRect();
+    if (!card.width || !card.height || !box.width || !box.height) return;
+    const p = map.latLngToContainerPoint(latlng);
+    const left = card.left - box.left;
+    const top = card.top - box.top;
+    const right = left + card.width;
+    const bottom = top + card.height;
+    const gap = 20;
+    if (p.x < left - gap || p.x > right + gap || p.y < top - gap || p.y > bottom + gap) return;
+    // Push the facility below the card or left of it, whichever is closer.
+    const below = bottom + gap - p.y;
+    const toLeft = p.x - (left - gap);
+    if (below <= toLeft) map.panBy([0, below], { animate: false });
+    else map.panBy([-toLeft, 0], { animate: false });
+  }
+
+  let selectedPointId = null;
+
+  function clearSelection() {
+    // Resets the highlights only; the details card is cleared separately
+    // (the x button keeps the selection, a new computation drops both).
+    if (selectedPointId !== null) {
+      const row = facilityListItems.querySelector(
+        `.facility-row[data-point-id="${selectedPointId}"]`
+      );
+      if (row) row.classList.remove("is-selected");
+      const label = reachLabelItems.find((i) => i.pointId === selectedPointId);
+      if (label) label.el.classList.remove("is-active");
+      const layer = pointLayers.get(selectedPointId);
+      if (layer) {
+        layer.setStyle({ color: "#d97706", weight: 1, fillOpacity: 0.9 });
+        layer.setRadius(4);
+      }
+    }
+    selectedPointId = null;
+  }
+
+  function markSelectedFacility(pointId) {
+    clearSelection();
+    selectedPointId = pointId;
+    const row = facilityListItems.querySelector(
+      `.facility-row[data-point-id="${pointId}"]`
+    );
+    if (row) {
+      row.classList.add("is-selected");
+      row.scrollIntoView({ block: "nearest" });
+    }
+    const label = reachLabelItems.find((i) => i.pointId === pointId);
+    if (label) label.el.classList.add("is-active");
+    const layer = pointLayers.get(pointId);
+    if (layer) {
+      layer.setStyle({ color: "#7c3aed", weight: 2, fillOpacity: 0.9 });
+      layer.setRadius(5);
+    }
+  }
+
+  facilityCardClose.addEventListener("click", () => {
+    // Dismiss the details only: the facility stays selected, so the purple
+    // route and the highlighted label/dot remain.
+    clearFacilityCard();
+  });
+
+  function renderFacilityList(sortedRoutes) {
+    // `sortedRoutes` arrives already sorted by walking time.
     facilityListItems.replaceChildren();
     if (!sortedRoutes.length) {
       const empty = document.createElement("div");
@@ -250,18 +376,162 @@
           : "";
         row.type = "button";
         row.className = "facility-row";
+        row.dataset.pointId = String(r.point_id);
         row.innerHTML =
           `<span class="facility-row-names">` +
           `<span class="facility-row-name-zh">${escapeHtml(primaryName)}</span>` +
           secondaryName +
           `</span>` +
           `<span class="facility-row-meta">${r.time_min.toFixed(1)} min &middot; ${Math.round(r.length_m).toLocaleString()} m</span>`;
-        row.addEventListener("click", () => showRoute(r.point_id, pointLayers.get(r.point_id)));
+        row.addEventListener("click", () => {
+          const layer = pointLayers.get(r.point_id);
+          showRoute(r.point_id, layer);
+        });
         facilityListItems.appendChild(row);
       });
     }
     facilityList.hidden = false;
   }
+
+  // ---- reachable-facility labels ----------------------------------------
+  // A name on every reachable facility covers the map, so the labels are
+  // placed by a small greedy layout: each facility takes the first free slot
+  // around its dot, closest facilities first, and a label that does not fit
+  // is hidden rather than overlapping another one.
+
+  const LABEL_GAP = 2;    // minimum space between two labels (px)
+  const LABEL_OFFSET = 8; // distance kept from the facility dot (px)
+
+  function labelsOverlap(a, b) {
+    return !(
+      a.x + a.w + LABEL_GAP <= b.x ||
+      b.x + b.w + LABEL_GAP <= a.x ||
+      a.y + a.h + LABEL_GAP <= b.y ||
+      b.y + b.h + LABEL_GAP <= a.y
+    );
+  }
+
+  function layoutReachLabels() {
+    const size = map.getSize();
+    const placed = [];
+    reachLabelTip.hidden = true;
+    reachLabelItems.forEach((item) => {
+      const anchor = map.latLngToContainerPoint(item.latlng);
+      if (
+        anchor.x < -LABEL_OFFSET || anchor.y < -LABEL_OFFSET ||
+        anchor.x > size.x + LABEL_OFFSET || anchor.y > size.y + LABEL_OFFSET
+      ) {
+        item.el.style.visibility = "hidden"; // off-screen
+        return;
+      }
+      if (!item.w) {
+        // Measure once; visibility:hidden still reports a size.
+        item.w = item.el.offsetWidth;
+        item.h = item.el.offsetHeight;
+      }
+      const w = item.w;
+      const h = item.h;
+      const candidates = [
+        { dx: LABEL_OFFSET, dy: -h / 2 },            // right
+        { dx: -w - LABEL_OFFSET, dy: -h / 2 },        // left
+        { dx: -w / 2, dy: -h - LABEL_OFFSET },        // above
+        { dx: -w / 2, dy: LABEL_OFFSET },             // below
+        { dx: LABEL_OFFSET, dy: -h - LABEL_OFFSET },  // top-right
+        { dx: -w - LABEL_OFFSET, dy: -h - LABEL_OFFSET }, // top-left
+        { dx: LABEL_OFFSET, dy: LABEL_OFFSET },       // bottom-right
+        { dx: -w - LABEL_OFFSET, dy: LABEL_OFFSET },  // bottom-left
+      ];
+      let rect = null;
+      for (const c of candidates) {
+        const r = { x: anchor.x + c.dx, y: anchor.y + c.dy, w, h };
+        if (!placed.some((p) => labelsOverlap(p, r))) {
+          rect = r;
+          break;
+        }
+      }
+      if (!rect) {
+        item.el.style.visibility = "hidden"; // no room for this one
+        return;
+      }
+      item.el.style.visibility = "visible";
+      item.el.style.transform = `translate3d(${Math.round(rect.x)}px, ${Math.round(rect.y)}px, 0)`;
+      item.rect = rect;
+      placed.push(rect);
+    });
+  }
+
+  function scheduleLabelLayout() {
+    if (labelLayoutQueued) return;
+    labelLayoutQueued = true;
+    const run = () => {
+      labelLayoutQueued = false;
+      layoutReachLabels();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
+  function showLabelTip(item) {
+    if (!item.rect) return;
+    const size = map.getSize();
+    reachLabelTip.textContent =
+      `${item.name} · ${item.time.toFixed(1)} min · ${item.dist.toLocaleString()} m`;
+    reachLabelTip.hidden = false;
+    const w = reachLabelTip.offsetWidth;
+    const h = reachLabelTip.offsetHeight;
+    let x = item.rect.x + item.rect.w / 2 - w / 2;
+    x = Math.max(2, Math.min(size.x - w - 2, x));
+    let y = item.rect.y - h - 6;
+    if (y < 2) y = item.rect.y + item.rect.h + 6;
+    reachLabelTip.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
+  }
+
+  function selectFacility(pointId, facility) {
+    // showRoute() draws the route, frames it and shows the details card.
+    showRoute(pointId, facility);
+  }
+
+  function renderReachLabels(routes) {
+    reachLabels.replaceChildren(reachLabelTip);
+    reachLabelItems = [];
+    routes.forEach((r) => {
+      const facility = pointLayers.get(r.point_id);
+      if (!facility) return;
+      const name = r.name_zh || r.name || "Facility";
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "reach-label";
+      el.textContent = name;
+      el.style.visibility = "hidden";
+      el.setAttribute("aria-label", `${name} — ${r.time_min.toFixed(1)} minutes`);
+      const item = {
+        el,
+        facility,
+        pointId: r.point_id,
+        latlng: facility.getLatLng(),
+        name,
+        time: r.time_min,
+        dist: Math.round(r.length_m),
+        w: 0,
+        h: 0,
+        rect: null,
+      };
+      el.addEventListener("mouseenter", () => showLabelTip(item));
+      el.addEventListener("mouseleave", () => { reachLabelTip.hidden = true; });
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectFacility(r.point_id, facility);
+      });
+      // Keep the click inside the label: it must not start a new
+      // service-area computation.
+      L.DomEvent.disableClickPropagation(el);
+      reachLabels.appendChild(el);
+      reachLabelItems.push(item);
+    });
+    layoutReachLabels();
+  }
+
+  map.on("move zoom resize", scheduleLabelLayout);
 
   // ---- service area query ---------------------------------------------
 
@@ -270,11 +540,13 @@
     const walkSpeedKmh = parseFloat(speedSlider.value);
     const err = document.getElementById("error");
     const res = document.getElementById("result");
-    const routeInfo = document.getElementById("routeInfo");
     err.hidden = true;
     allRoutesLayer.clearLayers();
     focusRouteLayer.clearLayers();
-    routeInfo.hidden = true;
+    // The previous selection (route, card, highlights) belongs to the old
+    // result set -> drop it.
+    clearSelection();
+    clearFacilityCard();
     facilityList.hidden = true;
     facilityListItems.replaceChildren();
     try {
@@ -321,7 +593,9 @@
 
       document.getElementById("count").textContent = data.count;
       document.getElementById("totalPoints").textContent = ` / ${data.total_points}`;
-      renderFacilityList(data.routes || []);
+      const routes = [...(data.routes || [])].sort((a, b) => a.time_min - b.time_min);
+      renderFacilityList(routes);
+      renderReachLabels(routes);
       document.getElementById("detail").innerHTML =
         `${data.reachable_nodes.toLocaleString()} reachable network nodes` +
         ` &middot; ${data.walk_speed_kmh.toFixed(1)} km/h` +

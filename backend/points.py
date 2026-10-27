@@ -13,6 +13,7 @@ import io
 import json
 import shutil
 import subprocess
+import warnings
 import zipfile
 from datetime import datetime, timezone
 
@@ -22,10 +23,6 @@ import urllib3
 from shapely.geometry import Point
 
 from . import config
-
-# The iGeoCom host serves an incomplete TLS chain, so its download is
-# deliberately unverified (see _download); silence the matching warning.
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CLASS = "COM"
 TYPES = ("CMC", "FSC")
@@ -52,7 +49,11 @@ def _download(url: str, dest) -> None:
             "falling back to requests (verify=False)",
             flush=True,
         )
-    resp = requests.get(url, verify=False, timeout=600)
+    # Silence the insecure-request warning for this one call only, rather
+    # than process-wide, so it cannot hide unrelated TLS problems.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+        resp = requests.get(url, verify=False, timeout=600)
     resp.raise_for_status()
     dest.write_bytes(resp.content)
 

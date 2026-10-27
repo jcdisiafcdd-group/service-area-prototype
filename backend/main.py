@@ -49,6 +49,17 @@ def health() -> dict:
     }
 
 
+@app.get("/health")
+def health_alias() -> dict:
+    """Alias for `/api/health`.
+
+    Dev tools and agents that probe a project server conventionally ask for
+    `/health`; without this alias they poll a path that does not exist and
+    fill the access log with 404s.
+    """
+    return health()
+
+
 @app.get("/api/district")
 def district() -> JSONResponse:
     gdf = gpd.read_file(config.DISTRICT_FILE)

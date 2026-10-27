@@ -1,6 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 requests==2.34.2
+urllib3==2.8.0             # imported directly by backend/points.py (iGeoCom fallback)
 
 pandas==3.0.3
 numpy==2.4.6
