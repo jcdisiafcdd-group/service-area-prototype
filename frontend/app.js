@@ -10,6 +10,9 @@
     }
   ).addTo(map);
 
+  // Own pane below the overlay pane (routes, dots), so the service area never covers them.
+  map.createPane("serviceAreaPane");
+  map.getPane("serviceAreaPane").style.zIndex = 350;
   const districtLayer = L.layerGroup().addTo(map);
   const pointsLayer = L.layerGroup();
   let polygonLayer = L.layerGroup().addTo(map);
@@ -28,9 +31,13 @@
   const reachLabels = document.createElement("div");
   reachLabels.className = "reach-labels";
   map.getContainer().appendChild(reachLabels);
+  // Leader lines ("tails") from each facility dot to its label, drawn under the labels.
+  const reachTails = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  reachTails.setAttribute("class", "reach-tails");
   const reachLabelTip = document.createElement("div");
   reachLabelTip.className = "reach-label-tip";
   reachLabelTip.hidden = true;
+  reachLabels.appendChild(reachTails);
   reachLabels.appendChild(reachLabelTip);
   let reachLabelItems = [];
   let labelLayoutQueued = false;
@@ -84,7 +91,7 @@
   fetch("/api/district")
     .then((r) => r.json())
     .then((fc) => {
-      L.geoJSON(fc, { interactive: false, style: { color: "#0b6bcb", weight: 2, fill: false } })
+      L.geoJSON(fc, { interactive: false, style: { color: "#9ca3af", weight: 2, fill: false } })
         .addTo(districtLayer);
       districtLayer.addTo(map);
       (function addLegend() {
@@ -208,9 +215,22 @@
       const latlngs = data.path.coordinates.map(([lon, lat]) => [lat, lon]);
       const line = L.polyline(latlngs, {
         interactive: false,
-        color: "#7c3aed", weight: 5, opacity: 0.9,
+        color: "#7c3aed", weight: 5, opacity: 0.95,
+      }).addTo(focusRouteLayer);
+      // A thin moving light along the route gives the impression that it is
+      // flowing from start to end.
+      const flow = L.polyline(latlngs, {
+        interactive: false,
+        color: "#ffd93b", weight: 2, opacity: 1,
       }).addTo(focusRouteLayer);
       focusRouteLayer.addTo(map);
+      const flowEl = flow.getElement ? flow.getElement() : null;
+      if (flowEl) {
+        flowEl.setAttribute("stroke-linecap", "round");
+        flowEl.style.strokeDasharray = "10 18";
+        flowEl.style.animation = "route-flow-light 0.5s linear infinite";
+        flowEl.style.pointerEvents = "none";
+      }
       const targetLatLng = targetLayer
         ? targetLayer.getLatLng()
         : latlngs[latlngs.length - 1];
@@ -399,8 +419,13 @@
   // around its dot, closest facilities first, and a label that does not fit
   // is hidden rather than overlapping another one.
 
-  const LABEL_GAP = 2;    // minimum space between two labels (px)
-  const LABEL_OFFSET = 8; // distance kept from the facility dot (px)
+  const LABEL_GAP = 2;         // minimum space between two labels (px)
+  const LABEL_RINGS = [10, 16, 22, 30, 40, 52, 66]; // distances tried from the dot (px)
+  const LABEL_DOT_R = 6;       // clearance kept around every facility dot (px)
+  const LABEL_ROUTE_CLEAR = 3; // clearance kept around every route line (px)
+  // Candidate directions, most preferred first: right, above, left, below, diagonals.
+  const LABEL_DIRS = [0, -90, 180, 90, -45, -135, 135, 45, -22.5, -67.5, -112.5, -157.5, 157.5, 112.5, 67.5, 22.5]
+    .map((deg) => ({ x: Math.cos((deg * Math.PI) / 180), y: Math.sin((deg * Math.PI) / 180) }));
 
   function labelsOverlap(a, b) {
     return !(
@@ -411,54 +436,160 @@
     );
   }
 
+  // Box = { x0, y0, x1, y1 } in container pixels.
+  function boxOf(x, y, w, h, pad = 0) {
+    return { x0: x - pad, y0: y - pad, x1: x + w + pad, y1: y + h + pad };
+  }
+
+  // Liang-Barsky: does the segment touch the box?
+  function segmentHitsBox(s, box) {
+    let t0 = 0;
+    let t1 = 1;
+    const dx = s.bx - s.ax;
+    const dy = s.by - s.ay;
+    const p = [-dx, dx, -dy, dy];
+    const q = [s.ax - box.x0, box.x1 - s.ax, s.ay - box.y0, box.y1 - s.ay];
+    for (let i = 0; i < 4; i++) {
+      if (p[i] === 0) {
+        if (q[i] < 0) return false;
+        continue;
+      }
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+    }
+    return true;
+  }
+
+  function countRouteHits(box, segs) {
+    let n = 0;
+    for (const s of segs) if (segmentHitsBox(s, box)) n++;
+    return n;
+  }
+
+  function countDotHits(box, dots, radius) {
+    let n = 0;
+    for (const d of dots) {
+      const cx = Math.max(box.x0, Math.min(d.x, box.x1));
+      const cy = Math.max(box.y0, Math.min(d.y, box.y1));
+      if ((d.x - cx) ** 2 + (d.y - cy) ** 2 < radius * radius) n++;
+    }
+    return n;
+  }
+
+  function collectRouteSegments() {
+    const segs = [];
+    getRouteScreenPolylines().forEach((pts) => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i];
+        const b = pts[i + 1];
+        segs.push({
+          ax: a.x, ay: a.y, bx: b.x, by: b.y,
+          minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y),
+          maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y),
+        });
+      }
+    });
+    return segs;
+  }
+
+  function getRouteScreenPolylines() {
+    const lines = [];
+    const collect = (layer) => {
+      if (!layer) return;
+      layer.eachLayer((l) => {
+        if (!l.getLatLngs) return;
+        const latlngs = l.getLatLngs();
+        const flatten = (arr) => {
+          if (!Array.isArray(arr)) return;
+          if (arr.length && arr[0] && typeof arr[0].lat === "number") {
+            const pts = arr.map((ll) => map.latLngToContainerPoint(ll));
+            if (pts.length > 1) lines.push(pts);
+            return;
+          }
+          arr.forEach(flatten);
+        };
+        flatten(latlngs);
+      });
+    };
+    collect(allRoutesLayer);
+    collect(focusRouteLayer);
+    return lines;
+  }
+
+  // Each label tries the closest clean spot around its dot: no overlap with
+  // another label, no route line through it, no facility dot under it. If no
+  // clean spot exists within the rings, the least-conflicting one is used so
+  // the label is still shown.
   function layoutReachLabels() {
     const size = map.getSize();
     const placed = [];
+    const segs = collectRouteSegments();
+    const dots = [...pointLayers.values()].map((l) => map.latLngToContainerPoint(l.getLatLng()));
     reachLabelTip.hidden = true;
+    reachTails.replaceChildren();
     reachLabelItems.forEach((item) => {
       const anchor = map.latLngToContainerPoint(item.latlng);
-      if (
-        anchor.x < -LABEL_OFFSET || anchor.y < -LABEL_OFFSET ||
-        anchor.x > size.x + LABEL_OFFSET || anchor.y > size.y + LABEL_OFFSET
-      ) {
+      if (anchor.x < -40 || anchor.y < -40 || anchor.x > size.x + 40 || anchor.y > size.y + 40) {
         item.el.style.visibility = "hidden"; // off-screen
         return;
       }
       if (!item.w) {
-        // Measure once; visibility:hidden still reports a size.
         item.w = item.el.offsetWidth;
         item.h = item.el.offsetHeight;
       }
       const w = item.w;
       const h = item.h;
-      const candidates = [
-        { dx: LABEL_OFFSET, dy: -h / 2 },            // right
-        { dx: -w - LABEL_OFFSET, dy: -h / 2 },        // left
-        { dx: -w / 2, dy: -h - LABEL_OFFSET },        // above
-        { dx: -w / 2, dy: LABEL_OFFSET },             // below
-        { dx: LABEL_OFFSET, dy: -h - LABEL_OFFSET },  // top-right
-        { dx: -w - LABEL_OFFSET, dy: -h - LABEL_OFFSET }, // top-left
-        { dx: LABEL_OFFSET, dy: LABEL_OFFSET },       // bottom-right
-        { dx: -w - LABEL_OFFSET, dy: LABEL_OFFSET },  // bottom-left
-      ];
-      let rect = null;
-      for (const c of candidates) {
-        const r = { x: anchor.x + c.dx, y: anchor.y + c.dy, w, h };
-        if (!placed.some((p) => labelsOverlap(p, r))) {
-          rect = r;
-          break;
-        }
+      const reach = LABEL_RINGS[LABEL_RINGS.length - 1] + Math.max(w, h);
+      const nearSegs = segs.filter((s) =>
+        s.maxX > anchor.x - reach && s.minX < anchor.x + reach &&
+        s.maxY > anchor.y - reach && s.minY < anchor.y + reach
+      );
+      let best = null;
+      for (const dist of LABEL_RINGS) {
+        LABEL_DIRS.forEach((u, order) => {
+          const px = anchor.x + u.x * dist;
+          const py = anchor.y + u.y * dist;
+          const x = px + (u.x > 0.3 ? 0 : u.x < -0.3 ? -w : -w / 2);
+          const y = py + (u.y > 0.3 ? 0 : u.y < -0.3 ? -h : -h / 2);
+          const box = boxOf(x, y, w, h);
+          const inside = x >= 2 && y >= 2 && x + w <= size.x - 2 && y + h <= size.y - 2;
+          const overlaps = placed.filter((p) => labelsOverlap(p, { x, y, w, h })).length;
+          const routeHits = countRouteHits(boxOf(x, y, w, h, LABEL_ROUTE_CLEAR), nearSegs);
+          const dotHits = countDotHits(box, dots, LABEL_DOT_R);
+          const cost = (inside ? 0 : 1000) + overlaps * 100 + dotHits * 30 + routeHits * 10;
+          const score = cost * 1000 + dist + order * 0.1;
+          if (!best || score < best.score) best = { score, rect: { x, y, w, h } };
+        });
       }
-      if (!rect) {
-        item.el.style.visibility = "hidden"; // no room for this one
-        return;
-      }
+      const rect = best.rect;
       item.el.style.visibility = "visible";
       item.el.style.transform = `translate3d(${Math.round(rect.x)}px, ${Math.round(rect.y)}px, 0)`;
       item.rect = rect;
       placed.push(rect);
+      item.tail = null;
+      // Tail: from the dot's centre to the nearest point of the label box.
+      const nx = Math.max(rect.x, Math.min(anchor.x, rect.x + w));
+      const ny = Math.max(rect.y, Math.min(anchor.y, rect.y + h));
+      const len = Math.hypot(nx - anchor.x, ny - anchor.y);
+      if (len > 0) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", anchor.x.toFixed(1));
+        line.setAttribute("y1", anchor.y.toFixed(1));
+        line.setAttribute("x2", nx.toFixed(1));
+        line.setAttribute("y2", ny.toFixed(1));
+        if (item.el.matches(":hover")) line.classList.add("is-hover");
+        item.tail = line;
+        reachTails.appendChild(line);
+      }
     });
   }
+
 
   function scheduleLabelLayout() {
     if (labelLayoutQueued) return;
@@ -479,11 +610,29 @@
     reachLabelTip.hidden = false;
     const w = reachLabelTip.offsetWidth;
     const h = reachLabelTip.offsetHeight;
-    let x = item.rect.x + item.rect.w / 2 - w / 2;
-    x = Math.max(2, Math.min(size.x - w - 2, x));
-    let y = item.rect.y - h - 6;
-    if (y < 2) y = item.rect.y + item.rect.h + 6;
-    reachLabelTip.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
+    const segs = collectRouteSegments();
+    const anchor = { x: item.rect.x + item.rect.w / 2, y: item.rect.y + item.rect.h / 2 };
+    const candidates = [
+      { x: anchor.x - w / 2, y: item.rect.y - h - 6 },
+      { x: anchor.x - w / 2, y: item.rect.y + item.rect.h + 6 },
+      { x: item.rect.x + item.rect.w + 6, y: anchor.y - h / 2 },
+      { x: item.rect.x - w - 6, y: anchor.y - h / 2 },
+      { x: item.rect.x + item.rect.w + 8, y: item.rect.y - h - 4 },
+      { x: item.rect.x - w - 8, y: item.rect.y - h - 4 },
+    ];
+    let best = null;
+    let bestScore = -Infinity;
+    for (const c of candidates) {
+      let cx = Math.max(2, Math.min(size.x - w - 2, c.x));
+      let cy = Math.max(2, Math.min(size.y - h - 2, c.y));
+      const rect = { x: cx, y: cy, w, h };
+      let score = 0;
+      if (c.y < item.rect.y) score += 2; // prefer above
+      if (countRouteHits(boxOf(cx, cy, w, h, 4), segs) > 0) score -= 3;
+      if (score > bestScore) { bestScore = score; best = { x: cx, y: cy }; }
+    }
+    const pos = best || { x: Math.max(2, Math.min(size.x - w - 2, item.rect.x + item.rect.w / 2 - w / 2)), y: item.rect.y - h - 6 < 2 ? item.rect.y + item.rect.h + 6 : item.rect.y - h - 6 };
+    reachLabelTip.style.transform = `translate3d(${Math.round(pos.x)}px, ${Math.round(pos.y)}px, 0)`;
   }
 
   function selectFacility(pointId, facility) {
@@ -492,7 +641,7 @@
   }
 
   function renderReachLabels(routes) {
-    reachLabels.replaceChildren(reachLabelTip);
+    reachLabels.replaceChildren(reachTails, reachLabelTip);
     reachLabelItems = [];
     routes.forEach((r) => {
       const facility = pointLayers.get(r.point_id);
@@ -516,8 +665,14 @@
         h: 0,
         rect: null,
       };
-      el.addEventListener("mouseenter", () => showLabelTip(item));
-      el.addEventListener("mouseleave", () => { reachLabelTip.hidden = true; });
+      el.addEventListener("mouseenter", () => {
+        showLabelTip(item);
+        if (item.tail) item.tail.classList.add("is-hover");
+      });
+      el.addEventListener("mouseleave", () => {
+        reachLabelTip.hidden = true;
+        if (item.tail) item.tail.classList.remove("is-hover");
+      });
       el.addEventListener("click", (e) => {
         e.stopPropagation();
         selectFacility(r.point_id, facility);
@@ -528,6 +683,7 @@
       reachLabels.appendChild(el);
       reachLabelItems.push(item);
     });
+    reachLabels.appendChild(reachLabelTip); // keep the hover tooltip above the labels
     layoutReachLabels();
   }
 
@@ -567,7 +723,8 @@
       if (data.polygon) {
         const areaLayer = L.geoJSON(data.polygon, {
           interactive: false,
-          style: { color: "#16a34a", weight: 2, fillOpacity: 0.18, fillColor: "#16a34a" },
+          pane: "serviceAreaPane",
+          style: { color: "#16a34a", weight: 2, fillColor: "#16a34a", fillOpacity: 0.08 },
         }).addTo(polygonLayer);
         const polygonBounds = areaLayer.getBounds();
         if (polygonBounds.isValid()) areaBounds.extend(polygonBounds);
@@ -582,7 +739,7 @@
       (data.routes || []).forEach((r) => {
         const route = L.polyline(r.path.coordinates.map(([lon, lat]) => [lat, lon]), {
           interactive: false,
-          color: "#3b82f6", weight: 2, opacity: 0.6,
+          color: "#3b82f6", weight: 2, opacity: 0.45,
         }).addTo(allRoutesLayer);
         const routeBounds = route.getBounds();
         if (routeBounds.isValid()) areaBounds.extend(routeBounds);
