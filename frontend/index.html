@@ -10,13 +10,13 @@
     body { display: grid; grid-template-columns: 340px minmax(0, 1fr); }
     #map { position: relative; min-width: 0; height: 100%; }
     .panel {
-      box-sizing: border-box; display: flex; flex-direction: column; height: 100%; overflow-y: auto;
+      box-sizing: border-box; display: flex; flex-direction: column; height: 100%; overflow: hidden;
       background: #fff; border-right: 1px solid #ddd; padding: 20px;
       font-size: 13px;
     }
-    .panel h1 { font-size: 16px; margin: 0 0 16px; }
+    .panel h1 { font-size: 16px; margin: 0 0 8px; }
     .controls { display: flex; flex-direction: column; gap: 8px; }
-    .search { position: relative; margin-bottom: 16px; }
+    .search { position: relative; margin: 0 0 8px; }
     .search-input {
       box-sizing: border-box; width: 100%; padding: 8px 10px;
       border: 1px solid #d1d5db; border-radius: 4px; font: inherit;
@@ -41,18 +41,48 @@
     .search-row-address-en { color: #888; font-size: 11px; }
     .search-mark { padding: 0 1px; border-radius: 2px; background: #fde68a; color: inherit; }
     .search-empty { padding: 9px 10px; color: #666; font-size: 12px; }
-    .layer-toggles { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
-    .layer-toggles label { white-space: nowrap; }
+    .walk-row {
+      position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      align-items: center; gap: 6px;
+    }
+    .walk-param { display: flex; flex-direction: column; min-width: 0; font-size: 11px; white-space: nowrap; }
+    .walk-param input[type="range"] { display: block; box-sizing: border-box; width: 100%; min-width: 0; margin: 2px 0 0; }
+    .layer-control {
+      padding: 6px 10px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+      color: #1f2937;
+      font: 12px/1.6 "Segoe UI", Arial, sans-serif;
+      white-space: nowrap;
+    }
+    .layer-control label { display: block; cursor: pointer; }
+    .layer-control input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: middle; }
     .panel label { display: block; font-weight: 600; }
     .panel input[type="checkbox"] { margin-right: 6px; vertical-align: middle; }
     .panel input[type="range"] { width: 100%; margin: 2px 0 8px; }
-    .result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee; }
+    .result { margin-top: 8px; }
     .result .big { font-size: 26px; font-weight: 700; color: #1a7f37; }
     .result .total { margin-left: 3px; color: #6b7280; font-size: 14px; font-weight: 600; }
     .result .hint { color: #666; margin-top: 4px; }
-    .facility-list { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee; }
-    .facility-list-heading { color: #374151; font-size: 12px; font-weight: 700; }
-    .facility-list-items { margin-top: 8px; border: 1px solid #eee; border-radius: 4px; }
+    .facility-list {
+      display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column;
+      margin-top: 8px;
+    }
+    .facility-list[hidden] { display: none; }
+    .facility-list-heading {
+      flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+      color: #374151; font-size: 12px; font-weight: 700;
+    }
+    .clear-results {
+      box-sizing: border-box; padding: 2px 6px; border: 0; border-radius: 3px;
+      background: transparent; color: #6b7280; font: 600 11px/1.2 Arial, sans-serif; cursor: pointer;
+    }
+    .clear-results:hover, .clear-results:focus-visible { background: #f3f4f6; color: #374151; outline: none; }
+    .facility-list-items {
+      flex: 1 1 auto; min-height: 0; overflow-y: auto;
+      margin-top: 8px; border: 1px solid #eee; border-radius: 4px;
+    }
     .facility-row {
       box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 10px;
       width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid #f0f0f0;
@@ -65,7 +95,7 @@
     .facility-row-name-en { overflow: hidden; color: #666; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
     .facility-row-meta { flex: 0 0 auto; color: #4b5563; font-size: 11px; white-space: nowrap; }
     .facility-list-empty { padding: 10px; color: #666; font-size: 12px; }
-    .hint { color: #555; line-height: 1.45; }
+    .hint { color: #555; line-height: 1.45; margin: 0; }
     /* Selected-facility details: a card floating over the top-right corner
        of the map (a Leaflet control), so it never sits in the way of the
        sidebar and no marker pop-up covers the map. */
@@ -99,12 +129,7 @@
       from { stroke-dashoffset: 0; }
       to   { stroke-dashoffset: -28; }
     }
-    .instructions { margin: 16px 0 0; color: #666; font-size: 12px; }
-    .footnote {
-      position: sticky; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 6px;
-      box-sizing: border-box; margin-top: auto; padding: 12px 0 0; border-top: 1px solid #eee;
-      background: #fff; color: #666; font-size: 11px;
-    }
+    .instructions { margin: 0 0 8px; color: #666; font-size: 12px; }
     .info-button {
       box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
       flex: 0 0 18px; width: 18px; height: 18px; padding: 0; border: 1px solid #9ca3af;
@@ -112,13 +137,29 @@
       font: 600 12px/1 Arial, sans-serif; cursor: pointer;
     }
     .info-button:hover, .info-button:focus-visible { background: #f3f4f6; color: #374151; outline: none; }
-    .info-popover {
-      position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 20;
-      box-sizing: border-box; width: 270px; max-width: calc(100vw - 40px);
-      padding: 12px; border: 1px solid #d1d5db; border-radius: 6px;
-      background: #fff; box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
-      color: #555; font-size: 12px; line-height: 1.45;
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
     }
+    .modal-backdrop[hidden] { display: none; }
+    .confirm-modal {
+      box-sizing: border-box; width: 320px; max-width: calc(100vw - 40px);
+      padding: 16px; border-radius: 6px; background: #fff;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      font-size: 13px;
+    }
+    .confirm-modal h2 { margin: 0 0 8px; font-size: 15px; }
+    .confirm-modal p { margin: 0 0 12px; color: #555; line-height: 1.45; }
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .btn-primary, .btn-secondary {
+      box-sizing: border-box; padding: 6px 12px; border: 1px solid #d1d5db;
+      border-radius: 4px; font: inherit; cursor: pointer;
+    }
+    .btn-primary { background: #0b6bcb; color: #fff; border-color: #0b6bcb; }
+    .btn-primary:hover { background: #095aa8; }
+    .btn-secondary { background: #fff; color: #374151; }
+    .btn-secondary:hover { background: #f3f4f6; }
     .info-popover strong { display: block; margin-bottom: 4px; color: #374151; }
     .info-popover p { margin: 0; }
     .facility-name { font-size: 14px; font-weight: 600; color: #1f2937; }
@@ -268,6 +309,7 @@
 <body>
   <div class="panel">
     <h1>Walking service area</h1>
+    <div class="hint instructions" id="instructions">Click the map or search a place to compute. Click a label, dot or list row for details.</div>
     <div class="search">
       <input type="search" id="placeSearch" class="search-input" autocomplete="off"
              placeholder="Search a place or address…" aria-label="Search a place or address"
@@ -276,33 +318,42 @@
       <div class="search-results" id="searchResults" role="listbox" aria-label="Search results" hidden></div>
     </div>
     <div class="controls">
-      <label for="slider">Walk time: <span id="minutesLabel">15</span> min</label>
-      <input type="range" id="slider" min="5" max="30" step="1" value="15" />
-      <label for="speedSlider">Walking speed: <span id="speedLabel">4.8</span> km/h</label>
-      <input type="range" id="speedSlider" min="2" max="6" step="0.1" value="4.8" />
-      <div class="layer-toggles">
-        <label><input type="checkbox" id="showPoints" checked /> Community facilities</label>
-        <label><input type="checkbox" id="showNetwork" checked /> District boundary</label>
+      <div class="walk-row">
+        <label class="walk-param" for="slider">Time <span id="minutesLabel">15</span> min
+          <input type="range" id="slider" min="5" max="30" step="1" value="15" />
+        </label>
+        <label class="walk-param" for="speedSlider">Speed <span id="speedLabel">4.8</span> km/h
+          <input type="range" id="speedSlider" min="2" max="6" step="0.1" value="4.8" />
+        </label>
+        <button class="info-button" id="walkingTimeInfo" type="button" title="Walking-time information" aria-label="Walking-time information" aria-expanded="false" aria-controls="walkingTimePopover" aria-haspopup="dialog">i</button>
+        <div class="info-popover" id="walkingTimePopover" role="dialog" aria-label="Walking-time note" hidden>
+          <strong>Walking-time note</strong>
+          <p>The estimate uses the selected constant speed on the official pedestrian network. It does not add traffic-light or crossing delays, slope/gradient speed penalties, accessibility-barrier restrictions, or special speeds for stairs, escalators, lifts, and travelators. Routes start and end at snapped network nodes, so short access distances are excluded.</p>
+        </div>
       </div>
     </div>
-    <div class="hint instructions">Click anywhere on the map to compute. Routes to every reachable facility are drawn automatically — click a map label, a facility dot or a list row to show its details in the top-right card and highlight its single route.</div>
     <div class="result" id="result" hidden>
       <div class="big"><span id="count">0</span><span class="total" id="totalPoints"></span></div>
       <div class="hint" id="detail"></div>
     </div>
     <div class="facility-list" id="facilityList" hidden>
-      <div class="facility-list-heading">Reachable facilities</div>
+      <div class="facility-list-heading">
+        <span>Reachable facilities</span>
+        <button class="clear-results" id="clearResults" type="button" aria-label="Clear results">&times; Clear</button>
+      </div>
       <div class="facility-list-items" id="facilityListItems"></div>
     </div>
-    <div class="footnote">
-      <button class="info-button" id="walkingTimeInfo" type="button" title="Walking-time information" aria-label="Walking-time information" aria-expanded="false" aria-controls="walkingTimePopover" aria-haspopup="dialog">i</button>
-      <span>Walking-time note</span>
-      <div class="info-popover" id="walkingTimePopover" role="dialog" aria-label="Walking-time note" hidden>
-        <strong>Walking-time note</strong>
-        <p>The estimate uses the selected constant speed on the official pedestrian network. It does not add traffic-light or crossing delays, slope/gradient speed penalties, accessibility-barrier restrictions, or special speeds for stairs, escalators, lifts, and travelators. Routes start and end at snapped network nodes, so short access distances are excluded.</p>
+    <div class="error" id="error" hidden></div>
+  </div>
+  <div class="modal-backdrop" id="confirmBackdrop" hidden>
+    <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">Replace service area?</h2>
+      <p>Computing from a new start point will discard the current results, routes and selection.</p>
+      <div class="confirm-actions">
+        <button type="button" class="btn-secondary" id="confirmCancel">Cancel</button>
+        <button type="button" class="btn-primary" id="confirmOk">Recalculate</button>
       </div>
     </div>
-    <div class="error" id="error" hidden></div>
   </div>
   <div id="map">
     <section class="facility-card" id="facilityCard" aria-live="polite" aria-label="Selected facility" hidden>

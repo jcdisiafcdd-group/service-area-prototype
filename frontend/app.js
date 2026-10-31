@@ -10,6 +10,41 @@
     }
   ).addTo(map);
 
+  // Place names overlay (LandsD, via CSDI WMS) — always on, no toggle.
+  // Try to render only labels (NAME_TC) without point symbols.
+  // If the WMS SLD approach fails (server may ignore), fall back to fetching GeoJSON and drawing div icons.
+  (function addPlaceNames() {
+    const wmsUrl = "https://portal.csdi.gov.hk/server/services/common/landsd_rcd_1648571595120_89752/MapServer/WMSServer";
+    const sld = `
+      <StyledLayerDescriptor version="1.0.0">
+        <NamedLayer><Name>GEO_PLACE_NAME</Name>
+          <UserStyle><FeatureTypeStyle>
+            <Rule>
+              <PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>
+                <Fill><CssParameter name="fill-opacity">0</CssParameter></Fill>
+                <Stroke><CssParameter name="stroke-opacity">0</CssParameter></Stroke>
+              </Mark><Size>1</Size></Graphic></PointSymbolizer>
+              <TextSymbolizer><Label><PropertyName>NAME_TC</PropertyName></Label>
+                <Font><CssParameter name="font-family">Arial</CssParameter><CssParameter name="font-size">11</CssParameter></Font>
+                <Fill><CssParameter name="fill">#333333</CssParameter></Fill>
+              </TextSymbolizer>
+            </Rule>
+          </FeatureTypeStyle></UserStyle>
+        </NamedLayer>
+      </StyledLayerDescriptor>`;
+    // Try the WMS with SLD first.
+    const wmsLayer = L.tileLayer.wms(wmsUrl, {
+      layers: "GEO_PLACE_NAME",
+      format: "image/png",
+      transparent: true,
+      version: "1.3.0",
+      crs: L.CRS.EPSG4326,
+      sld_body: sld,
+      attribution: "Place names © Lands Department, HK SAR",
+    });
+    wmsLayer.addTo(map);
+  })();
+
   // Own pane below the overlay pane (routes, dots), so the service area never covers them.
   map.createPane("serviceAreaPane");
   map.getPane("serviceAreaPane").style.zIndex = 350;
@@ -46,8 +81,28 @@
   const slider = document.getElementById("slider");
   const speedLabel = document.getElementById("speedLabel");
   const speedSlider = document.getElementById("speedSlider");
-  const showPoints = document.getElementById("showPoints");
-  const showNetwork = document.getElementById("showNetwork");
+  const { showPoints, showNetwork } = (function addLayerToggles() {
+    const LayerToggles = L.Control.extend({
+      options: { position: "bottomright" },
+      onAdd: function () {
+        const container = L.DomUtil.create("div", "layer-control");
+        container.innerHTML = `
+          <label><input type="checkbox" id="showPoints" checked /> Community facilities</label>
+          <label><input type="checkbox" id="showNetwork" checked /> District boundary</label>
+        `;
+        L.DomEvent.disableClickPropagation(container);
+        L.DomEvent.disableScrollPropagation(container);
+        return container;
+      },
+    });
+    const control = new LayerToggles();
+    map.addControl(control);
+    const container = control.getContainer();
+    return {
+      showPoints: container.querySelector("#showPoints"),
+      showNetwork: container.querySelector("#showNetwork"),
+    };
+  })();
   const infoButton = document.getElementById("walkingTimeInfo");
   const infoPopover = document.getElementById("walkingTimePopover");
   const facilityList = document.getElementById("facilityList");
@@ -148,6 +203,15 @@
           },
         });
         map.addControl(new Legend());
+    // Keep the layer toggle above the legend in the bottom-right corner.
+    const layerCorner = map.getContainer().querySelector(".leaflet-bottom.leaflet-right");
+    if (layerCorner) {
+      const toggle = layerCorner.querySelector(".layer-control");
+      const legend = layerCorner.querySelector(".legend");
+      if (toggle && legend && toggle !== legend.previousElementSibling) {
+        layerCorner.insertBefore(toggle, legend);
+      }
+    }
       })();
     });
 
@@ -378,6 +442,32 @@
     // route and the highlighted label/dot remain.
     clearFacilityCard();
   });
+
+  // Clears the current result (service area, routes, list, labels, card,
+  // selection and the start marker). A new click or search starts afresh.
+  function clearResults() {
+    allRoutesLayer.clearLayers();
+    focusRouteLayer.clearLayers();
+    polygonLayer.clearLayers();
+    if (clickMarker) clickMarker.remove();
+    clickMarker = null;
+    lastLat = null;
+    lastLng = null;
+    map.setView([22.3308, 114.1621], 15);
+    clearSelection();
+    clearFacilityCard();
+    facilityList.hidden = true;
+    facilityListItems.replaceChildren();
+    reachLabelItems = [];
+    reachTails.replaceChildren();
+    reachLabels.replaceChildren(reachTails, reachLabelTip);
+    reachLabelTip.hidden = true;
+    document.getElementById("result").hidden = true;
+    document.getElementById("error").hidden = true;
+    document.getElementById("instructions").hidden = false;
+  }
+
+  document.getElementById("clearResults").addEventListener("click", clearResults);
 
   function renderFacilityList(sortedRoutes) {
     // `sortedRoutes` arrives already sorted by walking time.
@@ -692,6 +782,7 @@
   // ---- service area query ---------------------------------------------
 
   async function compute(lat, lng) {
+    document.getElementById("instructions").hidden = true;
     const minutes = parseInt(slider.value, 10);
     const walkSpeedKmh = parseFloat(speedSlider.value);
     const err = document.getElementById("error");
@@ -753,11 +844,6 @@
       const routes = [...(data.routes || [])].sort((a, b) => a.time_min - b.time_min);
       renderFacilityList(routes);
       renderReachLabels(routes);
-      document.getElementById("detail").innerHTML =
-        `${data.reachable_nodes.toLocaleString()} reachable network nodes` +
-        ` &middot; ${data.walk_speed_kmh.toFixed(1)} km/h` +
-        ` &middot; snapped ${data.snapped.lat.toFixed(5)}, ${data.snapped.lon.toFixed(5)}` +
-        ` &middot; ${data.ms.toFixed(0)} ms`;
       res.hidden = false;
     } catch (e) {
       err.textContent = "Request failed.";
@@ -765,7 +851,48 @@
     }
   }
 
+  const confirmBackdrop = document.getElementById("confirmBackdrop");
+  const confirmOk = document.getElementById("confirmOk");
+  const confirmCancel = document.getElementById("confirmCancel");
+  let pendingCompute = null;
+
+  function hasResults() {
+    return !document.getElementById("result").hidden;
+  }
+
+  function openConfirm(lat, lng) {
+    pendingCompute = { lat, lng };
+    confirmBackdrop.hidden = false;
+    confirmOk.focus();
+  }
+
+  function closeConfirm() {
+    confirmBackdrop.hidden = true;
+    pendingCompute = null;
+  }
+
+  confirmOk.addEventListener("click", () => {
+    if (pendingCompute) {
+      const { lat, lng } = pendingCompute;
+      closeConfirm();
+      lastLat = lat;
+      lastLng = lng;
+      compute(lastLat, lastLng);
+    }
+  });
+  confirmCancel.addEventListener("click", closeConfirm);
+  confirmBackdrop.addEventListener("click", (e) => {
+    if (e.target === confirmBackdrop) closeConfirm();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !confirmBackdrop.hidden) closeConfirm();
+  });
+
   map.on("click", (e) => {
+    if (hasResults()) {
+      openConfirm(e.latlng.lat, e.latlng.lng);
+      return;
+    }
     lastLat = e.latlng.lat;
     lastLng = e.latlng.lng;
     compute(lastLat, lastLng);

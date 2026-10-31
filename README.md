@@ -42,7 +42,7 @@ service-area-prototype/
     main.py            # FastAPI app: GET /api/points, /api/search; POST /api/service-area + /api/route; serves frontend/
     run.py             # launcher that also works from inside backend/
   frontend/
-    index.html         # Leaflet map, 340px sidebar, search box, top-right facility details card, layer toggles, sliders, reachable list, map legend, i-note popover
+    index.html         # Leaflet map, 340px sidebar, search box, top-right facility details card, top-right layer toggles control, side-by-side sliders with i-note button, reachable list, map legend
     app.js             # service area, place search, map auto-fit, all-route drawing, reachable list, purple single-route highlight, top-right details card control, legend control, reachable-facility labels
   data/                # cached raw edges, graph, points (generated — not checked in)
   venv/                # Python virtual environment
@@ -189,7 +189,7 @@ Notes:
 | Prototype district | `backend/config.py` (or ingest CLI arg) | `Sham Shui Po District` |
 | Facility points | `backend/points.py` (`CLASS`/`TYPES`) | iGeoCom `COM` + `CMC`/`FSC` (28 in SSP) |
 | Minutes slider range | `frontend/index.html` / `frontend/app.js` | 5–30 |
-| Sidebar | `frontend/index.html` / `frontend/app.js` | 340px, scrollable; reachable list shown in full (single panel scroll) with one-row layer toggles |
+| Sidebar | `frontend/index.html` / `frontend/app.js` | 340px, not scrollable as a whole; only the reachable list scrolls; sliders share one row; layer toggles are a top-right map control |
 | Map legend | `frontend/index.html` / `frontend/app.js` | Bottom-right Leaflet control (no plugin); fixed 18px swatch column; start swatch uses the real Leaflet default marker icon |
 | Facility labels | `frontend/index.html` / `frontend/app.js` | Chinese-name chip per reachable facility; greedy layout around each marker, no overlaps, unfittable names hidden; the selected one is highlighted, never hidden |
 | Facility details | `frontend/index.html` / `frontend/app.js` | Top-right map card, a plain Leaflet control (no map pop-up, no sidebar card): name, type, both addresses, walk time and distance; `×`/`Escape` dismisses it; clicks inside never recompute |
